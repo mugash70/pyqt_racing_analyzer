@@ -40,7 +40,6 @@ ENV/
 .DS_Store
 
 # Database
-*.db
 *.db-shm
 *.db-wal
 *.sqlite
@@ -69,5 +68,4 @@ Thumbs.db
 
 # Project specific
 hkjc_terminal.log
-hkjc_races.db
 hkjc_racesx.db
