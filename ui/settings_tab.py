@@ -216,8 +216,8 @@ class ScrapingWorker(QThread):
                 "騎師最愛": "save_jockey_favourites",
                 "練馬師最愛": "save_trainer_favourites",
                 "標準時間": "save_standard_times",
-                "騎師排名": "save_jockey_rankings",
-                "練馬師排名": "save_trainer_rankings",
+                "騎師排名": "sync_all_rankings",
+                "練馬師排名": "sync_all_rankings",
                 "賽程表": "save_fixtures",
                 "試閘資料": "save_barrier_tests",
                 "賽事摘要": "save_last_race_summaries",
@@ -234,23 +234,139 @@ class ScrapingWorker(QThread):
             if method_name:
                 self.progress.emit(f"正在抓取{self.scrape_type}...")
                 
-                if method_name == "update_trainer_king_odds" or method_name == "update_race_day_changes" or method_name == "update_track_selection":
-                    # Methods that take date string instead of datetime
+                if method_name in ["update_trainer_king_odds", "update_race_day_changes", "update_track_selection", "sync_professional_schedules", "save_standard_times"]:
+                    # Methods that take date string
                     records = getattr(pipeline, method_name)(self.date_from)
-                elif method_name == "save_jkc_stats" or method_name == "save_tnc_stats" or method_name == "save_conghua_movement" or method_name == "save_horse_ratings" or method_name == "save_jockey_rankings" or method_name == "save_trainer_rankings" or method_name == "save_standard_times":
+                elif method_name in ["save_last_race_summaries", "save_wind_tracker"]:
+                    # Methods that take datetime object
+                    records = getattr(pipeline, method_name)(race_date)
+                elif method_name in ["save_race_results", "save_future_race_cards", "save_weather", "save_detailed_trackwork"]:
+                    # Methods that take (datetime, racecourse)
+                    records = getattr(pipeline, method_name)(race_date, self.racecourse)
+                elif method_name in ["sync_all_rankings", "save_fixtures", "save_barrier_tests", "save_injury_records_v2", "save_battle_memorandum", "save_new_horse_introductions"]:
                     # Methods that take no parameters
                     records = getattr(pipeline, method_name)()
-                elif method_name == "save_jockey_favourites" or method_name == "save_trainer_favourites":
-                    # Methods with different parameter signatures
-                    records = getattr(pipeline, method_name)()
                 else:
-                    # Standard methods with race_date and racecourse parameters
-                    records = getattr(pipeline, method_name)(race_date, self.racecourse)
+                    # Generic fallback - try with no parameters first, then with date if it fails
+                    try:
+                        records = getattr(pipeline, method_name)()
+                    except TypeError:
+                        try:
+                            records = getattr(pipeline, method_name)(self.date_from)
+                        except TypeError:
+                            records = getattr(pipeline, method_name)(race_date)
             else:
                 records = 0
                 
             self.progress.emit(f"完成: 保存了 {records} 條記錄")
             self.finished.emit({"status": "success", "records": records})
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class RunAllScrapersWorker(QThread):
+    """Worker that runs all scrapers sequentially."""
+    progress = pyqtSignal(str, int, int)  # message, current, total
+    finished = pyqtSignal(dict)
+    error = pyqtSignal(str)
+    
+    def __init__(self, date_from, racecourse="ST"):
+        super().__init__()
+        self.date_from = date_from
+        self.racecourse = racecourse
+        self._is_cancelled = False
+    
+    def cancel(self):
+        self._is_cancelled = True
+    
+    def run(self):
+        try:
+            import sys
+            import os
+            parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            sys.path.insert(0, parent_dir)
+            
+            from scraper.pipeline import HKJCDataPipeline
+            from datetime import datetime
+            
+            pipeline = HKJCDataPipeline()
+            race_date = datetime.strptime(self.date_from, "%Y-%m-%d")
+            
+            # All scrapers in order with their display names and method mapping
+            all_scrapers = [
+                ("賽程表", "save_fixtures", None),
+                ("標準時間", "save_standard_times", None),
+                ("試閘資料", "save_barrier_tests", None),
+                ("賽事結果", "save_race_results", "race_date_racecourse"),
+                ("未來賽事", "save_future_race_cards", "race_date_racecourse"),
+                ("天氣數據", "save_weather", "race_date_racecourse"),
+                ("詳細晨操", "save_detailed_trackwork", "race_date_racecourse"),
+                ("練馬師王賠率", "update_trainer_king_odds", "date_string"),
+                ("賽日更改", "update_race_day_changes", "date_string"),
+                ("賽道選擇", "update_track_selection", "date_string"),
+                ("騎師統計", "save_jkc_stats", None),
+                ("練馬師統計", "save_tnc_stats", None),
+                ("从化轉移", "save_conghua_movement", None),
+                ("馬匹評分", "save_horse_ratings", None),
+                ("騎師最愛", "save_jockey_favourites", None),
+                ("練馬師最愛", "save_trainer_favourites", None),
+                ("騎師排名", "sync_all_rankings", None),
+                ("練馬師排名", "sync_all_rankings", None),
+                ("賽事摘要", "save_last_race_summaries", "race_date"),
+                ("傷患記錄", "save_injury_records_v2", None),
+                ("風速追蹤", "save_wind_tracker", "race_date"),
+                ("對戰備忘", "save_battle_memorandum", None),
+                ("新馬介紹", "save_new_horse_introductions", None),
+                ("專業排班", "sync_professional_schedules", "date_string"),
+                ("同步排名", "sync_all_rankings", None),
+            ]
+            
+            total = len(all_scrapers)
+            results = {
+                'success': 0,
+                'failed': 0,
+                'total_records': 0,
+                'scrapers': []
+            }
+            
+            for i, (display_name, method_name, param_type) in enumerate(all_scrapers):
+                if self._is_cancelled:
+                    self.progress.emit("已取消", i + 1, total)
+                    break
+                
+                self.progress.emit(f"[{i+1}/{total}] 正在抓取 {display_name}...", i + 1, total)
+                
+                try:
+                    records = 0
+                    if param_type == "date_string":
+                        records = getattr(pipeline, method_name)(self.date_from)
+                    elif param_type == "race_date":
+                        records = getattr(pipeline, method_name)(race_date)
+                    elif param_type == "race_date_racecourse":
+                        records = getattr(pipeline, method_name)(race_date, self.racecourse)
+                    else:
+                        records = getattr(pipeline, method_name)()
+                    
+                    results['success'] += 1
+                    results['total_records'] += records if records else 0
+                    results['scrapers'].append({
+                        'name': display_name,
+                        'status': 'success',
+                        'records': records
+                    })
+                    self.progress.emit(f"✓ {display_name}: {records} 條記錄", i + 1, total)
+                    
+                except Exception as e:
+                    results['failed'] += 1
+                    results['scrapers'].append({
+                        'name': display_name,
+                        'status': 'failed',
+                        'error': str(e)
+                    })
+                    self.progress.emit(f"✗ {display_name}: 失敗 ({str(e)[:50]})", i + 1, total)
+            
+            self.finished.emit(results)
+            
         except Exception as e:
             self.error.emit(str(e))
 
@@ -304,7 +420,7 @@ class SettingsTab(QWidget):
         
         self.scraper_card = Card(self.tr("Data Scrapers"))
         
-        # Date selector for scrapers
+        # Date selector for scrapers - with Run All button
         date_row = QHBoxLayout()
         date_row.addWidget(QLabel(self.tr("賽道:")))
         self.scraper_course = QComboBox()
@@ -320,8 +436,80 @@ class SettingsTab(QWidget):
         self.scraper_date.setCalendarPopup(True)
         self.scraper_date.setDisplayFormat("yyyy-MM-dd")
         date_row.addWidget(self.scraper_date)
+        
+        date_row.addSpacing(20)
+        
+        # Run All Button
+        self.run_all_btn = QPushButton(self.tr("🚀 執行全部"))
+        self.run_all_btn.setMinimumWidth(140)
+        self.run_all_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #22c55e;
+                border: none;
+                border-radius: 6px;
+                color: white;
+                font-weight: 700;
+                font-size: 12px;
+                padding: 8px 16px;
+            }
+            QPushButton:hover {
+                background-color: #16a34a;
+            }
+            QPushButton:disabled {
+                background-color: #475569;
+            }
+        """)
+        self.run_all_btn.clicked.connect(self.start_all_scrapers)
+        date_row.addWidget(self.run_all_btn)
+        
+        # Stop All Button
+        self.stop_all_btn = QPushButton(self.tr("⏹ 停止"))
+        self.stop_all_btn.setMinimumWidth(100)
+        self.stop_all_btn.setEnabled(False)
+        self.stop_all_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #ef4444;
+                border: none;
+                border-radius: 6px;
+                color: white;
+                font-weight: 600;
+                font-size: 12px;
+                padding: 8px 16px;
+            }
+            QPushButton:hover {
+                background-color: #dc2626;
+            }
+            QPushButton:disabled {
+                background-color: #475569;
+            }
+        """)
+        self.stop_all_btn.clicked.connect(self.stop_all_scrapers)
+        date_row.addWidget(self.stop_all_btn)
+        
+        # Overall progress bar
+        self.overall_progress = QProgressBar()
+        self.overall_progress.setVisible(False)
+        self.overall_progress.setFixedHeight(8)
+        self.overall_progress.setStyleSheet("""
+            QProgressBar {
+                border: none;
+                background-color: #334155;
+                border-radius: 4px;
+                height: 8px;
+            }
+            QProgressBar::chunk {
+                background-color: #22c55e;
+                border-radius: 4px;
+            }
+        """)
+        
         date_row.addStretch()
         self.scraper_card.body.addLayout(date_row)
+        self.scraper_card.body.addWidget(self.overall_progress)
+        
+        # Track if running all scrapers
+        self.running_all = False
+        self.run_all_worker = None
         
         # Grid of scraper buttons
         grid = QGridLayout()
@@ -640,13 +828,103 @@ class SettingsTab(QWidget):
         # Notify main window to refresh date dropdown if new data was scraped
         if records > 0:
             main_window = self.window()
+            # Classic UI refresh
             if hasattr(main_window, '_populate_date_dropdown'):
                 main_window._populate_date_dropdown()
+            
+            # Redesigned UI refresh
+            if hasattr(main_window, 'dashboard') and hasattr(main_window.dashboard, 'load_dates'):
+                main_window.dashboard.load_dates()
     
     def on_scraper_error(self, scraper_name, error):
         """Handle scraper error"""
         self.scraper_log.append(f"✗ {scraper_name} failed: {error}")
         self.reset_scraper_button(scraper_name)
+
+    def start_all_scrapers(self):
+        """Start running all scrapers sequentially"""
+        if self.running_all:
+            return
+        
+        self.running_all = True
+        self.run_all_btn.setEnabled(False)
+        self.stop_all_btn.setEnabled(True)
+        self.overall_progress.setVisible(True)
+        
+        # Disable all individual scraper buttons
+        for name, btn in self.scraper_buttons.items():
+            btn.setEnabled(False)
+        
+        # Get date and course
+        date_str = self.scraper_date.date().toString("yyyy-MM-dd")
+        course_map = {"沙田": "ST", "跑馬地": "HV", "Sha Tin": "ST", "Happy Valley": "HV"}
+        racecourse = course_map.get(self.scraper_course.currentText(), "ST")
+        
+        self.scraper_log.append(f"=== 開始執行全部 scrapers ({date_str}, {racecourse}) ===")
+        
+        # Create and start worker
+        self.run_all_worker = RunAllScrapersWorker(date_str, racecourse)
+        self.run_all_worker.progress.connect(self.on_all_scrapers_progress)
+        self.run_all_worker.finished.connect(self.on_all_scrapers_finished)
+        self.run_all_worker.error.connect(self.on_all_scrapers_error)
+        self.run_all_worker.start()
+    
+    def on_all_scrapers_progress(self, message, current, total):
+        """Handle progress from all scrapers worker"""
+        self.scraper_log.append(message)
+        # Update progress bar
+        percentage = int((current / total) * 100)
+        self.overall_progress.setValue(percentage)
+        self.overall_progress.setMaximum(100)
+    
+    def on_all_scrapers_finished(self, results):
+        """Handle completion of all scrapers"""
+        self.running_all = False
+        self.run_all_btn.setEnabled(True)
+        self.stop_all_btn.setEnabled(False)
+        
+        # Re-enable all individual scraper buttons
+        for name, btn in self.scraper_buttons.items():
+            btn.setEnabled(True)
+        
+        success = results.get('success', 0)
+        failed = results.get('failed', 0)
+        total_records = results.get('total_records', 0)
+        
+        self.scraper_log.append(f"=== 執行完成 ===")
+        self.scraper_log.append(f"成功: {success}, 失敗: {failed}, 總記錄: {total_records}")
+        
+        # Refresh date dropdown
+        main_window = self.window()
+        if hasattr(main_window, '_populate_date_dropdown'):
+            main_window._populate_date_dropdown()
+        if hasattr(main_window, 'dashboard') and hasattr(main_window.dashboard, 'load_dates'):
+            main_window.dashboard.load_dates()
+    
+    def on_all_scrapers_error(self, error):
+        """Handle error in all scrapers worker"""
+        self.scraper_log.append(f"錯誤: {error}")
+        self.running_all = False
+        self.run_all_btn.setEnabled(True)
+        self.stop_all_btn.setEnabled(False)
+        
+        # Re-enable all individual scraper buttons
+        for name, btn in self.scraper_buttons.items():
+            btn.setEnabled(True)
+    
+    def stop_all_scrapers(self):
+        """Stop all scrapers"""
+        if self.run_all_worker and self.run_all_worker.isRunning():
+            self.run_all_worker.cancel()
+            self.run_all_worker.wait()
+        self.scraper_log.append("=== 已停止 ===")
+        self.running_all = False
+        self.run_all_btn.setEnabled(True)
+        self.stop_all_btn.setEnabled(False)
+        
+        # Re-enable all individual scraper buttons
+        for name, btn in self.scraper_buttons.items():
+            btn.setEnabled(True)
 
     def start_prediction(self):
         self.pred_log.clear()

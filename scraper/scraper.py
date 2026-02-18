@@ -30,43 +30,61 @@ class HKJCResultsScraper:
         self.driver = None
 
     def _get_driver(self):
-        """Initialize headless Chrome driver."""
+        """Initialize headless Chrome driver once and reuse it."""
         if self.driver:
-            return self.driver
+            try:
+                # Check if driver is still responsive
+                self.driver.current_url
+                return self.driver
+            except Exception:
+                logger.info("Driver unresponsive, restarting...")
+                try: self.driver.quit()
+                except: pass
+                self.driver = None
             
         options = Options()
-        options.add_argument('--headless')
+        options.add_argument('--headless=new')
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
         options.add_argument('--disable-gpu')
         options.add_argument('--window-size=1920,1080')
-        options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+        options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.7632.75 Safari/537.36')
+        options.add_argument('--disable-blink-features=AutomationControlled')
         
         try:
             from selenium.webdriver.chrome.service import Service
             from webdriver_manager.chrome import ChromeDriverManager
             
-            # Use webdriver-manager to handle driver versions automatically
-            service = Service(ChromeDriverManager().install())
+            # Use webdriver_manager to get the correct ChromeDriver version
+            driver_path = ChromeDriverManager().install()
+            logger.info(f"Using ChromeDriver from: {driver_path}")
+            
+            service = Service(executable_path=driver_path)
             self.driver = webdriver.Chrome(service=service, options=options)
-                
+            self.driver.set_page_load_timeout(30)
             return self.driver
         except Exception as e:
-            logger.error(f"Failed to initialize Selenium driver: {e}")
-            # Fallback to default initialization if webdriver-manager fails
+            logger.error(f"Failed to initialize ChromeDriver: {e}")
             try:
-                self.driver = webdriver.Chrome(options=options)
-                return self.driver
+                # Fallback: try direct chromedriver path
+                local_driver = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'drivers', 'chromedriver')
+                if os.path.exists(local_driver):
+                    service = Service(executable_path=local_driver)
+                    self.driver = webdriver.Chrome(service=service, options=options)
+                    self.driver.set_page_load_timeout(30)
+                    return self.driver
             except Exception as e2:
                 logger.error(f"Fallback Selenium initialization failed: {e2}")
                 return None
 
     def close(self):
-        """Close the Selenium driver."""
+        """Properly close the driver instance."""
         if self.driver:
-            self.driver.quit()
+            try:
+                self.driver.quit()
+            except:
+                pass
             self.driver = None
-
     def get_available_dates(self) -> List[datetime]:
         """Fetch available race dates."""
         url = f"{self.BASE_URL}/localresults"
@@ -376,11 +394,43 @@ class HKJCResultsScraper:
         distance_match = re.search(r'(\d+米|\d+M)', race_info_text)
         distance = distance_match.group(1) if distance_match else ""
         
+        # Extract venue and time
+        venue_match = re.search(r'(Sha Tin|Happy Valley|沙田|跑馬地)', race_info_text)
+        extracted_venue = venue_match.group(1) if venue_match else racecourse
+        # Normalize venue to ST/HV
+        if extracted_venue in ['Sha Tin', '沙田']: extracted_venue = 'ST'
+        elif extracted_venue in ['Happy Valley', '跑馬地']: extracted_venue = 'HV'
+        
+        time_match = re.search(r'(\d{1,2}:\d{2})', race_info_text)
+        race_time = time_match.group(1) if time_match else ""
+        
+        track_match = re.search(r'(Turf|All Weather|草地|全天候)', race_info_text)
+        track = track_match.group(1) if track_match else ""
+        
+        course_match = re.search(r'("[\w\+]+" Course|[\w\+]+ 跑道)', race_info_text)
+        course_info = course_match.group(1) if course_match else ""
+        
+        if track:
+            extracted_venue = f"{extracted_venue} ({track})"
+        if course_info:
+            extracted_venue = f"{extracted_venue} {course_info}"
+
         class_match = re.search(r'(第[一二三四五]班|Class [1-5]|新馬|G[1-3]|讓賽)', race_info_text)
         race_class = class_match.group(1) if class_match else ""
 
-        going_match = re.search(r'(好地|快地|稍慢|黏地|軟地|爛地|GOOD|FIRM|YIELDING|SOFT|HEAVY|AWT)', race_info_text.upper())
+        rating_match = re.search(r'Rating:?\s*(\d+[-]\d+)', race_info_text)
+        rating_range = rating_match.group(1) if rating_match else ""
+        if rating_range:
+            race_class = f"{race_class} ({rating_range})" if race_class else rating_range
+
+        prize_match = re.search(r'Prize Money:?\s*(\$[\d,]+)', race_info_text)
+        prize = prize_match.group(1) if prize_match else ""
+
+        going_match = re.search(r'(好地|快地|稍慢|黏地|軟地|爛地|GOOD|FIRM|YIELDING|SOFT|HEAVY|AWT|TURF|ALL WEATHER)', race_info_text.upper())
         going = going_match.group(1) if going_match else ""
+        
+        if prize:
+            going = f"{going} • {prize}" if going else prize
         
         horse_data = []
         if not table:
@@ -441,8 +491,9 @@ class HKJCResultsScraper:
                 
                 horse_data.append({
                     'race_date': race_date,
+                    'race_time': race_time,
                     'race_number': race_number,
-                    'racecourse': racecourse,
+                    'racecourse': extracted_venue,
                     'horse_number': int(horse_num_text),
                     'horse_name': horse_name,
                     'jockey': cols[header_idx.get('jockey', 3)].text.strip() if 'jockey' in header_idx and header_idx['jockey'] < len(cols) else "",

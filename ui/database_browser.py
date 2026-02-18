@@ -7,7 +7,7 @@ Database Browser - Modern interface for viewing and filtering database tables
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem, QTableWidget,
     QTableWidgetItem, QLabel, QLineEdit, QPushButton, QDateEdit, QComboBox, 
-    QSpinBox, QFrame, QGridLayout, QSizePolicy
+    QSpinBox, QFrame, QGridLayout, QSizePolicy, QFileDialog, QMessageBox
 )
 from PyQt5.QtCore import Qt, QDate, QSize
 from PyQt5.QtGui import QFont, QColor, QPalette, QIcon
@@ -618,11 +618,64 @@ class DatabaseBrowser(QWidget):
     
     def export_data(self):
         """Export current view to CSV"""
+        # Ensure we have the latest data if none is currently loaded
+        if self.current_df is None or self.current_df.empty:
+            if self.current_table:
+                self.load_table_data()
+            else:
+                # No table selected - show warning
+                QMessageBox.warning(
+                    self,
+                    self.tr("沒有數據"),
+                    self.tr("沒有可導出的數據。請先選擇一個表格並點擊刷新。")
+                )
+                return
+        
+        # Apply filters and check if we have data
+        self.apply_filters()
+
         if self.filtered_df is not None and not self.filtered_df.empty:
-            # In a real implementation, add file dialog here
-            filename = f"{self.current_table}_export.csv"
-            self.filtered_df.to_csv(filename, index=False)
-            print(f"Exported to {filename}")
+            # Show file save dialog
+            default_filename = f"{self.current_table}_export.csv"
+            filename, _ = QFileDialog.getSaveFileName(
+                self,
+                self.tr("導出CSV文件"),
+                default_filename,
+                "CSV Files (*.csv);;All Files (*)"
+            )
+            
+            if filename:
+                try:
+                    # Use a robust encoding strategy
+                    try:
+                        self.filtered_df.to_csv(filename, index=False, encoding='utf-8-sig')
+                    except UnicodeEncodeError:
+                        self.filtered_df.to_csv(filename, index=False, encoding='utf-8')
+                        
+                    QMessageBox.information(
+                        self,
+                        self.tr("導出成功"),
+                        self.tr(f"數據已成功導出到:\n{filename}")
+                    )
+                    print(f"Exported to {filename}")
+                except Exception as e:
+                    import traceback
+                    error_details = traceback.format_exc()
+                    print(f"Export error: {error_details}")
+                    QMessageBox.critical(
+                        self,
+                        self.tr("導出失敗"),
+                        self.tr(f"導出時發生錯誤:\n{str(e)}")
+                    )
+            else:
+                # User cancelled
+                print("Export cancelled by user")
+        else:
+            QMessageBox.warning(
+                self,
+                self.tr("沒有數據"),
+                self.tr("沒有可導出的數據。請先選擇一個表格並點擊刷新。")
+            )
     
     def refresh_data(self):
         """Refresh data from database"""

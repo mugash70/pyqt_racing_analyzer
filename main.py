@@ -151,8 +151,7 @@ class DataLoadingWorker(QThread):
             self.pipeline.save_last_race_summaries(today)
             
             self.progress_update.emit("獲取專業日程...", 89)
-            self.pipeline.save_professional_schedules('trainer')
-            self.pipeline.save_professional_schedules('jockey')
+            self.pipeline.sync_professional_schedules(today_str)
             
             self.progress_update.emit("更新馬鞍與閘位統計...", 91)
             self.pipeline.save_barrier_stats_v2()
@@ -177,10 +176,7 @@ class DataLoadingWorker(QThread):
             self.pipeline.update_track_selection(today_str)
             
             self.progress_update.emit("更新受傷記錄...", 100)
-            try:
-                self.pipeline.save_injury_records_v2()
-            except AttributeError:
-                logger.warning("save_injury_records_v2 method not available, skipping")
+            self.pipeline.save_injury_records_v2()
             
             self.progress_update.emit("數據加載完成", 100)
             self.loading_complete.emit()
@@ -1281,8 +1277,31 @@ class MainWindow(QMainWindow):
             self.analytics_tab.retranslate_ui()
         # Add other tabs here as they implement retranslate_ui
 
+def check_dependencies():
+    """Verify that all required dependencies are installed."""
+    missing = []
+    for module in ['requests', 'bs4', 'selenium', 'webdriver_manager', 'PyQt5', 'pandas', 'numpy']:
+        try:
+            if module == 'bs4':
+                import bs4
+            else:
+                __import__(module)
+        except ImportError:
+            missing.append(module)
+    
+    if missing:
+        print("\n" + "!"*60)
+        print(f"CRITICAL ERROR: Missing dependencies: {', '.join(missing)}")
+        print("Please install them using: pip install -r requirements.txt")
+        print("!"*60 + "\n")
+        return False
+    return True
+
 def main():
     """Main entry point"""
+    # Check dependencies before starting
+    check_dependencies()
+    
     app = QApplication(sys.argv)
     
     # Show loading screen

@@ -8,7 +8,8 @@ import os
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QTableWidget,
     QTableWidgetItem, QComboBox, QSpinBox, QPushButton, QProgressBar,
-    QSplitter, QTextEdit, QCheckBox, QTabWidget
+    QSplitter, QTextEdit, QCheckBox, QTabWidget, QLineEdit, QListWidget,
+    QListWidgetItem
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QFont, QColor
@@ -194,21 +195,94 @@ class AnalysisTab(QWidget):
         return widget
     
     def _create_horse_tab(self):
-        """Create horse performance tab with dropdown and charts"""
+        """Create horse performance tab with search input and charts"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
+        
+        # Store all horses for filtering
+        self.all_horses = []
         
         # Controls
         controls = QFrame()
         controls.setStyleSheet("background-color: #1e293b; border-radius: 8px; padding: 12px;")
-        controls_layout = QHBoxLayout(controls)
+        controls_layout = QVBoxLayout(controls)
         
-        controls_layout.addWidget(QLabel("選擇馬匹:"))
-        horse_combo = QComboBox()
-        horse_combo.setStyleSheet(self._combo_style())
-        horse_combo.currentTextChanged.connect(self._on_horse_selected)
-        controls_layout.addWidget(horse_combo)
-        controls_layout.addStretch()
+        # Search label
+        search_label = QLabel("輸入馬匹名稱搜索:")
+        search_label.setStyleSheet("color: #cbd5e1; font-weight: bold; margin-bottom: 4px;")
+        controls_layout.addWidget(search_label)
+        
+        # Search input row
+        search_row = QHBoxLayout()
+        
+        # Search input (replaces dropdown)
+        horse_search = QLineEdit()
+        horse_search.setPlaceholderText("例如: 金鑽精靈")
+        horse_search.setStyleSheet("""
+            QLineEdit {
+                background-color: #0f172a;
+                color: #f8fafc;
+                border: 1px solid #334155;
+                border-radius: 6px;
+                padding: 8px 12px;
+                font-size: 14px;
+                min-width: 250px;
+            }
+            QLineEdit:focus {
+                border-color: #3b82f6;
+            }
+        """)
+        horse_search.textChanged.connect(self._on_horse_search_changed)
+        horse_search.returnPressed.connect(self._on_horse_search_enter)
+        
+        # Search button
+        search_btn = QPushButton("搜索")
+        search_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3b82f6;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 20px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #2563eb;
+            }
+        """)
+        search_btn.clicked.connect(lambda: self._on_horse_search_enter())
+        
+        search_row.addWidget(horse_search)
+        search_row.addWidget(search_btn)
+        search_row.addStretch()
+        
+        controls_layout.addLayout(search_row)
+        
+        # Search results list (replaces dropdown)
+        self.horse_list = QListWidget()
+        self.horse_list.setStyleSheet("""
+            QListWidget {
+                background-color: #0f172a;
+                border: 1px solid #334155;
+                border-radius: 6px;
+                color: #f8fafc;
+                padding: 4px;
+                max-height: 200px;
+            }
+            QListWidget::item {
+                padding: 8px;
+                border-bottom: 1px solid #334155;
+            }
+            QListWidget::item:selected {
+                background-color: #3b82f6;
+            }
+            QListWidget::item:hover {
+                background-color: #1e293b;
+            }
+        """)
+        self.horse_list.itemClicked.connect(self._on_horse_list_item_clicked)
+        self.horse_list.setVisible(False)  # Hidden by default
+        controls_layout.addWidget(self.horse_list)
         
         layout.addWidget(controls)
         
@@ -231,7 +305,7 @@ class AnalysisTab(QWidget):
         chart_title.setStyleSheet("color: #f8fafc; font-weight: bold; padding: 10px;")
         chart_layout.addWidget(chart_title)
         
-        self.horse_chart = QLabel("請選擇馬匹以查看名次圖表")
+        self.horse_chart = QLabel("請輸入馬匹名稱進行搜索")
         self.horse_chart.setStyleSheet("color: #cbd5e1; padding: 20px; font-family: monospace;")
         self.horse_chart.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         chart_layout.addWidget(self.horse_chart)
@@ -242,9 +316,99 @@ class AnalysisTab(QWidget):
         layout.addLayout(content_layout)
         
         widget.table = table
-        widget.horse_combo = horse_combo
+        widget.horse_search = horse_search
+        widget.horse_list = self.horse_list
         widget.chart = self.horse_chart
+        
+        # Load all horses for search
+        self._load_all_horses()
+        
         return widget
+    
+    def _load_all_horses(self):
+        """Load all horse names for search"""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT DISTINCT horse_name
+            FROM race_results
+            WHERE horse_name IS NOT NULL AND horse_name != ''
+            ORDER BY horse_name
+        """)
+        self.all_horses = [row[0] for row in cursor.fetchall()]
+    
+    def _on_horse_search_changed(self, text):
+        """Handle search text changes - filter results"""
+        # Get widgets from current tab
+        current_widget = self.tab_widget.currentWidget()
+        if not hasattr(current_widget, 'horse_list'):
+            return
+            
+        horse_list = current_widget.horse_list
+        
+        if not text or len(text) < 1:
+            horse_list.setVisible(False)
+            return
+        
+        # Filter horses matching the search text
+        filtered = [h for h in self.all_horses if text.lower() in h.lower()]
+        
+        # Show max 15 results
+        filtered = filtered[:15]
+        
+        horse_list.clear()
+        for horse in filtered:
+            horse_list.addItem(horse)
+        
+        # Show list if there are results
+        horse_list.setVisible(len(filtered) > 0)
+    
+    def _on_horse_search_enter(self):
+        """Handle enter key in search - select first match or search"""
+        # Get widgets from current tab
+        current_widget = self.tab_widget.currentWidget()
+        if not hasattr(current_widget, 'horse_search') or not hasattr(current_widget, 'horse_list'):
+            return
+        
+        horse_search = current_widget.horse_search
+        horse_list = current_widget.horse_list
+        horse_chart = current_widget.chart
+        
+        text = horse_search.text().strip()
+        if not text:
+            return
+        
+        # Try to find exact or partial match
+        matches = [h for h in self.all_horses if text.lower() in h.lower()]
+        
+        if len(matches) == 1:
+            # Single match - load directly
+            self._load_horse_performance(matches[0])
+            horse_list.setVisible(False)
+        elif len(matches) > 1:
+            # Multiple matches - show list
+            horse_list.clear()
+            for horse in matches[:15]:
+                horse_list.addItem(horse)
+            horse_list.setVisible(True)
+            horse_list.setCurrentRow(0)
+        else:
+            # No matches
+            horse_chart.setText(f"找不到馬匹: {text}\n\n請確認馬匹名稱是否正確")
+    
+    def _on_horse_list_item_clicked(self, item):
+        """Handle click on horse in search results"""
+        # Get widgets from current tab
+        current_widget = self.tab_widget.currentWidget()
+        if not hasattr(current_widget, 'horse_search') or not hasattr(current_widget, 'horse_list'):
+            return
+        
+        horse_search = current_widget.horse_search
+        horse_list = current_widget.horse_list
+        
+        horse_name = item.text()
+        horse_search.setText(horse_name)
+        horse_list.setVisible(False)
+        self._load_horse_performance(horse_name)
     
     def _create_weight_tab(self):
         """Create weight analysis tab"""

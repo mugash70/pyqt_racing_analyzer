@@ -185,7 +185,11 @@ class RaceCardWidget(QFrame):
         # Header
         header_layout = QHBoxLayout()
         
-        race_title = QLabel(f"第{self.race_number}場 • {self.racecourse}")
+        race_title_text = f"第{self.race_number}場 • {self.racecourse}"
+        if self.race_info.get('time'):
+            race_title_text += f" ({self.race_info['time']})"
+        
+        race_title = QLabel(race_title_text)
         race_title.setFont(QFont("Arial", 14, QFont.Bold))
         race_title.setStyleSheet(f"color: {DARK_COLORS['text_primary']};")
         header_layout.addWidget(race_title)
@@ -494,12 +498,20 @@ class PredictionWorker(QThread):
             logging_errors = []
             for race_pred in predictions:
                 race_info = race_pred.get('race_info', {})
+                # Normalize date to YYYY-MM-DD format for database storage
+                race_date = race_info.get('date')
+                if race_date and isinstance(race_date, str) and ' ' in race_date:
+                    race_date = race_date.split(' ')[0]  # Remove timestamp if present
+                
+                race_number = race_info.get('number')
+                racecourse = race_info.get('track')
+                
                 for i, horse_pred in enumerate(race_pred.get('predictions', [])):
                     try:
                         tracker.log_prediction({
-                            'race_date': race_info.get('date'),
-                            'race_number': race_info.get('number'),
-                            'racecourse': race_info.get('track'),
+                            'race_date': race_date,
+                            'race_number': race_number,
+                            'racecourse': racecourse,
                             'horse_name': horse_pred.get('horse_name'),
                             'horse_number': horse_pred.get('horse_number'),
                             'predicted_rank': i + 1,
@@ -835,6 +847,8 @@ class RedesignedHomePage(QWidget):
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
+
+            print("=------------",self.selected_date)
             # Get horses from future race cards for the selected date
             cursor.execute("""
                 SELECT horse_name, trainer, jockey, recent_results, rating
@@ -908,17 +922,19 @@ class RedesignedHomePage(QWidget):
                     except:
                         date_str = d
                     
-                    # Add availability indicator
+                    # Add availability indicator and only show available dates
                     if d in racecard_dates:
                         display = f"✓ {date_str}"
+                        self.date_combo.addItem(display, d)
                     else:
-                        display = f"✗ {date_str}"
-                    
-                    self.date_combo.addItem(display, d)
+                        # Skip dates without racecard data
+                        continue
                 
-                # Restore selection
+                # Restore selection or select the most recent available date
                 if current_idx >= 0 and current_idx < self.date_combo.count():
                     self.date_combo.setCurrentIndex(current_idx)
+                elif self.date_combo.count() > 0:
+                    self.date_combo.setCurrentIndex(0)
         except Exception as e:
             print(f"Error loading dates: {e}")
     
@@ -945,22 +961,61 @@ class RedesignedHomePage(QWidget):
             
             # Try future_race_cards first (most reliable)
             if 'future_race_cards' in tables:
-                cursor.execute("""
-                    SELECT DISTINCT race_number, racecourse, race_distance, race_class, track_going
-                    FROM future_race_cards
-                    WHERE DATE(race_date) = ?
-                    ORDER BY race_number
-                """, (race_date,))
+                # Handle racecourse mapping to be robust (matches ST/HV or Sha Tin/Happy Valley)
+                if self.selected_course == "ST":
+                    cursor.execute("""
+                        SELECT DISTINCT race_number, racecourse, race_distance, race_class, track_going, race_time
+                        FROM future_race_cards
+                        WHERE DATE(race_date) = ? 
+                        AND (racecourse LIKE '%ST%' OR racecourse LIKE '%Sha Tin%' OR racecourse LIKE '%沙田%')
+                        ORDER BY race_number
+                    """, (race_date,))
+                elif self.selected_course == "HV":
+                    cursor.execute("""
+                        SELECT DISTINCT race_number, racecourse, race_distance, race_class, track_going, race_time
+                        FROM future_race_cards
+                        WHERE DATE(race_date) = ? 
+                        AND (racecourse LIKE '%HV%' OR racecourse LIKE '%Happy Valley%' OR racecourse LIKE '%跑馬地%')
+                        ORDER BY race_number
+                    """, (race_date,))
+                else:
+                    # Default case - all courses
+                    cursor.execute("""
+                        SELECT DISTINCT race_number, racecourse, race_distance, race_class, track_going, race_time
+                        FROM future_race_cards
+                        WHERE DATE(race_date) = ?
+                        ORDER BY race_number
+                    """, (race_date,))
+                
                 races = cursor.fetchall()
-            
+
             # If no races, try fixtures table
             if not races and 'fixtures' in tables:
                 cursor.execute("PRAGMA table_info(fixtures)")
                 columns = [row['name'] for row in cursor.fetchall()]
-                # Build query based on available columns
-                select_cols = "racecourse, distance as race_distance, race_class"
                 
-                cursor.execute(f"SELECT DISTINCT race_date, racecourse, {select_cols} FROM fixtures WHERE DATE(race_date) = ?", (race_date,))
+                # Handle racecourse filtering for fixtures table
+                if self.selected_course == "ST":
+                    cursor.execute("""
+                        SELECT DISTINCT race_date, racecourse, distance as race_distance, race_class, expected_races
+                        FROM fixtures 
+                        WHERE DATE(race_date) = ? 
+                        AND (racecourse LIKE '%ST%' OR racecourse LIKE '%Sha Tin%' OR racecourse LIKE '%沙田%')
+                    """, (race_date,))
+                elif self.selected_course == "HV":
+                    cursor.execute("""
+                        SELECT DISTINCT race_date, racecourse, distance as race_distance, race_class, expected_races
+                        FROM fixtures 
+                        WHERE DATE(race_date) = ? 
+                        AND (racecourse LIKE '%HV%' OR racecourse LIKE '%Happy Valley%' OR racecourse LIKE '%跑馬地%')
+                    """, (race_date,))
+                else:
+                    cursor.execute("""
+                        SELECT DISTINCT race_date, racecourse, distance as race_distance, race_class, expected_races
+                        FROM fixtures 
+                        WHERE DATE(race_date) = ?
+                    """, (race_date,))
+                
                 fixture_races = cursor.fetchall()
                 for fr in fixture_races:
                     # Convert sqlite3.Row to dict
@@ -980,9 +1035,9 @@ class RedesignedHomePage(QWidget):
                             'racecourse': fr_dict.get('racecourse', 'Unknown'),
                             'race_distance': fr_dict.get('race_distance', 'Unknown'),
                             'race_class': fr_dict.get('race_class', 'Unknown'),
-                            'track_going': 'Unknown'
+                            'track_going': 'Unknown',
+                            'race_time': None
                         })
-                
             
             conn.close()
             
@@ -1019,7 +1074,8 @@ class RedesignedHomePage(QWidget):
                 race_info = {
                     'distance': race.get('race_distance', 'Unknown'),
                     'race_class': race.get('race_class', 'Unknown'),
-                    'going': race.get('track_going', 'Unknown')
+                    'going': race.get('track_going', 'Unknown'),
+                    'time': race.get('race_time', '')
                 }
                 
                 card = RaceCardWidget(
@@ -1055,14 +1111,35 @@ class RedesignedHomePage(QWidget):
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
+            # Normalize the date for comparison - extract just the date part if there's a timestamp
+            normalized_date = card.race_date
+            if normalized_date and ' ' in str(normalized_date):
+                normalized_date = str(normalized_date).split(' ')[0]
+            
+            # Build racecourse condition based on selected course
+            # Use simple equality check to avoid binding issues
+            course_value = card.racecourse  # Use the exact value from the card
+            
+            # Try multiple date formats to ensure we find matching predictions
             cursor.execute("""
                 SELECT horse_name, horse_number, predicted_rank, predicted_win_prob, confidence, current_odds
                 FROM prediction_log
-                WHERE DATE(race_date) = ? AND race_number = ? AND racecourse = ?
+                WHERE (race_date = ? OR DATE(race_date) = ?) AND race_number = ? AND racecourse = ?
                 ORDER BY predicted_rank
-            """, (card.race_date, card.race_number, card.racecourse))
+            """, (normalized_date, normalized_date, card.race_number, course_value))
             
             rows = cursor.fetchall()
+            
+            # If no results with exact match, try without racecourse filter
+            if not rows:
+                cursor.execute("""
+                    SELECT horse_name, horse_number, predicted_rank, predicted_win_prob, confidence, current_odds
+                    FROM prediction_log
+                    WHERE (race_date = ? OR DATE(race_date) = ?) AND race_number = ?
+                    ORDER BY predicted_rank
+                """, (normalized_date, normalized_date, card.race_number))
+                rows = cursor.fetchall()
+            
             conn.close()
             
             if rows:
@@ -1087,6 +1164,16 @@ class RedesignedHomePage(QWidget):
     def load_metrics(self):
         """Load accuracy metrics."""
         try:
+            # Check if requests is available as it might be needed by some imports
+            try:
+                import requests
+            except ImportError:
+                print("[ERROR] requests module is not installed. Please run: pip install requests")
+                self.metrics_widget.update_metrics({
+                    'win_rate': 0, 'place_rate': 0, 'roi': 0, 'avg_odds': 0, 'predictions': 0, 'races': 0
+                })
+                return
+
             # Try to get metrics from verification module
             from engine.verification.accuracy_tracker import AccuracyTracker
             

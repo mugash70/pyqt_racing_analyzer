@@ -31,10 +31,21 @@ class HKJCDataPipeline:
         return sqlite3.connect(self.db_path)
 
     def _initialize_new_tables(self):
-        """Create new tables if they don't exist."""
+        """Create new tables if they don't exist and migrate schema if needed."""
         conn = self._get_connection()
         cursor = conn.cursor()
         
+        # 1. Ensure tables exist
+        self._create_tables_if_not_exists(cursor)
+        
+        # 2. Migration: Check for missing columns in existing tables
+        self._migrate_schema(cursor)
+        
+        conn.commit()
+        conn.close()
+
+    def _create_tables_if_not_exists(self, cursor):
+        """Create all tables with full schema."""
         # JKC Stats
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS jkc_stats (
@@ -219,11 +230,12 @@ class HKJCDataPipeline:
             )
         """)
         
-        # Future Race Cards - Missing table causing save failures
+        # Future Race Cards
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS future_race_cards (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 race_date TEXT,
+                race_time TEXT,
                 race_number INTEGER,
                 racecourse TEXT,
                 horse_number INTEGER,
@@ -239,7 +251,7 @@ class HKJCDataPipeline:
             )
         """)
         
-        # Race Results - Missing table causing save failures
+        # Race Results
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS race_results (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -259,7 +271,7 @@ class HKJCDataPipeline:
             )
         """)
         
-        # Live Odds - Missing table causing save failures
+        # Live Odds
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS odds_live (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -274,7 +286,7 @@ class HKJCDataPipeline:
             )
         """)
         
-        # Odds History - Missing table causing save failures
+        # Odds History
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS odds_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -420,11 +432,29 @@ class HKJCDataPipeline:
                 scraped_at TEXT
             )
         """)
-        
-        conn.commit()
-        conn.close()
 
-    def sync_all_rankings(self) -> int:
+    def _migrate_schema(self, cursor):
+        """Add missing columns to existing tables."""
+        migrations = {
+            "new_horse_introductions": ["origin", "trainer", "age", "sex"],
+            "wind_tracker": ["track", "position", "wind_direction", "wind_speed", "gust_speed", "temperature", "humidity", "rainfall", "update_time"],
+            "injury_records": ["condition", "status"],
+            "future_race_cards": ["race_time"]
+        }
+        
+        for table, columns in migrations.items():
+            try:
+                cursor.execute(f"PRAGMA table_info({table})")
+                existing_cols = [row[1] for row in cursor.fetchall()]
+                
+                for col in columns:
+                    if col not in existing_cols:
+                        logger.info(f"Migrating table {table}: adding column {col}")
+                        cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} TEXT")
+            except sqlite3.OperationalError as e:
+                logger.error(f"Failed to migrate table {table}: {e}")
+
+    def sync_all_rankings(self, *args, **kwargs) -> int:
         """Sync jockey and trainer rankings."""
         total = 0
         j_rankings = self.scraper.scrape_jockey_rankings()
@@ -437,7 +467,7 @@ class HKJCDataPipeline:
             
         return total
 
-    def save_jockey_rankings(self, rankings: List[Dict]) -> int:
+    def save_jockey_rankings(self, rankings: List[Dict], *args, **kwargs) -> int:
         conn = self._get_connection()
         cursor = conn.cursor()
         scraped_at = datetime.now().isoformat()
@@ -468,7 +498,7 @@ class HKJCDataPipeline:
         conn.close()
         return count
 
-    def save_trainer_rankings(self, rankings: List[Dict]) -> int:
+    def save_trainer_rankings(self, rankings: List[Dict], *args, **kwargs) -> int:
         conn = self._get_connection()
         cursor = conn.cursor()
         scraped_at = datetime.now().isoformat()
@@ -528,27 +558,27 @@ class HKJCDataPipeline:
                     cursor.execute("""
                         UPDATE future_race_cards SET
                         horse_name = ?, jockey = ?, trainer = ?, weight = ?, draw = ?,
-                        race_distance = ?, race_class = ?, track_going = ?, scraped_at = ?
+                        race_distance = ?, race_class = ?, track_going = ?, race_time = ?, scraped_at = ?
                         WHERE id = ?
                     """, (
                         horse['horse_name'], horse['jockey'], horse['trainer'], 
                         horse['weight'], horse['draw'], horse['race_distance'],
-                        horse['race_class'], horse['track_going'], horse['scraped_at'],
-                        existing[0]
+                        horse['race_class'], horse['track_going'], horse.get('race_time', ''),
+                        horse['scraped_at'], existing[0]
                     ))
                 else:
                     cursor.execute("""
                         INSERT INTO future_race_cards (
                             race_date, race_number, racecourse, horse_number, horse_name,
                             jockey, trainer, weight, draw, race_distance, race_class,
-                            track_going, scraped_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            track_going, race_time, scraped_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         horse['race_date'], horse['race_number'], horse['racecourse'],
                         horse['horse_number'], horse['horse_name'], horse['jockey'],
                         horse['trainer'], horse['weight'], horse['draw'],
                         horse['race_distance'], horse['race_class'], horse['track_going'],
-                        horse['scraped_at']
+                        horse.get('race_time', ''), horse['scraped_at']
                     ))
                 total_saved += 1
                 
@@ -851,7 +881,7 @@ class HKJCDataPipeline:
         conn.close()
         return count
 
-    def save_fixtures(self) -> int:
+    def save_fixtures(self, *args, **kwargs) -> int:
         """Fetch and save fixtures."""
         data = self.scraper.scrape_fixtures()
         if not data:
@@ -907,7 +937,7 @@ class HKJCDataPipeline:
         conn.close()
         return count
 
-    def save_barrier_tests(self) -> int:
+    def save_barrier_tests(self, *args, **kwargs) -> int:
         """Fetch and save barrier tests."""
         data = self.scraper.scrape_barrier_tests()
         if not data:
@@ -1012,7 +1042,7 @@ class HKJCDataPipeline:
         conn.close()
         return count
 
-    def save_last_race_summaries(self, race_date) -> int:
+    def save_last_race_summaries(self, race_date, *args, **kwargs) -> int:
         """Fetch and save last race summaries."""
         if isinstance(race_date, datetime):
             race_date = race_date.strftime('%Y-%m-%d')
@@ -1166,6 +1196,15 @@ class HKJCDataPipeline:
         
         conn = self._get_connection()
         cursor = conn.cursor()
+        
+        # Schema safety check
+        try:
+            cursor.execute("PRAGMA table_info(wind_tracker)")
+            cols = [row[1] for row in cursor.fetchall()]
+            if 'track' not in cols:
+                cursor.execute("ALTER TABLE wind_tracker ADD COLUMN track TEXT")
+        except: pass
+            
         scraped_at = datetime.now().isoformat()
         
         count = 0
@@ -1220,7 +1259,7 @@ class HKJCDataPipeline:
         conn.close()
         return count
 
-    def save_battle_memorandum(self) -> int:
+    def save_battle_memorandum(self, *args, **kwargs) -> int:
         """Fetch and save battle memorandum."""
         data = self.scraper.scrape_battle_memorandum()
         if not data:
@@ -1250,7 +1289,7 @@ class HKJCDataPipeline:
         conn.close()
         return count
 
-    def save_new_horse_introductions(self) -> int:
+    def save_new_horse_introductions(self, *args, **kwargs) -> int:
         """Fetch and save new horse introductions."""
         data = self.scraper.scrape_new_horse_introductions()
         if not data:
@@ -1258,6 +1297,22 @@ class HKJCDataPipeline:
         
         conn = self._get_connection()
         cursor = conn.cursor()
+        
+        # Double check schema
+        try:
+            cursor.execute("PRAGMA table_info(new_horse_introductions)")
+            cols = [row[1] for row in cursor.fetchall()]
+            if 'origin' not in cols:
+                cursor.execute("ALTER TABLE new_horse_introductions ADD COLUMN origin TEXT")
+            if 'trainer' not in cols:
+                cursor.execute("ALTER TABLE new_horse_introductions ADD COLUMN trainer TEXT")
+            if 'age' not in cols:
+                cursor.execute("ALTER TABLE new_horse_introductions ADD COLUMN age TEXT")
+            if 'sex' not in cols:
+                cursor.execute("ALTER TABLE new_horse_introductions ADD COLUMN sex TEXT")
+        except:
+            pass
+            
         scraped_at = datetime.now().isoformat()
         
         # Clear existing introductions and insert fresh data (latest list of new horses)
@@ -1290,6 +1345,17 @@ class HKJCDataPipeline:
         
         conn = self._get_connection()
         cursor = conn.cursor()
+        
+        # Schema safety check
+        try:
+            cursor.execute("PRAGMA table_info(injury_records)")
+            cols = [row[1] for row in cursor.fetchall()]
+            if 'condition' not in cols:
+                cursor.execute("ALTER TABLE injury_records ADD COLUMN condition TEXT")
+            if 'status' not in cols:
+                cursor.execute("ALTER TABLE injury_records ADD COLUMN status TEXT")
+        except: pass
+            
         scraped_at = datetime.now().isoformat()
         
         count = 0
@@ -1333,7 +1399,7 @@ class HKJCDataPipeline:
         return count
 
 
-    def sync_professional_schedules(self, race_date: str) -> int:
+    def sync_professional_schedules(self, race_date: str, *args, **kwargs) -> int:
         """Sync jockey and trainer schedules."""
         total = 0
         for pro_type in ['jockey', 'trainer']:
