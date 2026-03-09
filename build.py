@@ -38,6 +38,10 @@ def build_executable():
         "--hidden-import=pandas",
         "--hidden-import=numpy",
         "--hidden-import=sqlite3",
+        "--hidden-import=requests",
+        "--hidden-import=beautifulsoup4",
+        "--hidden-import=selenium",
+        "--hidden-import=webdriver_manager",
         "main.py"                      # Main script
     ]
 

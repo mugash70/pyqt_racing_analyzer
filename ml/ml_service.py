@@ -115,6 +115,11 @@ class MLService:
             predictions = []
 
             for horse in race_data:
+                # Skip horses without valid odds
+                if not horse.get('odds'):
+                    logger.warning(f"Skipping horse {horse.get('horse_name', 'Unknown')} - no valid odds")
+                    continue
+                    
                 # Engineer features for this horse
                 features = self._engineer_horse_features(horse, race_date)
 
@@ -224,14 +229,14 @@ class MLService:
             horses = [dict(row) for row in horse_rows]
             for horse in horses:
                 horse['race_number'] = race_number
-                # Try to get real odds, fallback to default based on draw position
+                # Get real odds from positions_json
                 draw = horse.get('draw', 8)
-                default_odds = 5.0 + (draw * 0.5)  # Inside draws get lower default odds
-                horse['odds'] = odds_dict.get(str(draw), default_odds)
+                horse['odds'] = odds_dict.get(str(draw), None)
                 
-                # Ensure odds is never None
-                if horse['odds'] is None or horse['odds'] <= 0:
-                    horse['odds'] = default_odds
+                # Skip horses without valid odds data
+                if not horse['odds'] or horse['odds'] <= 1.0 or horse['odds'] > 100:
+                    logger.warning(f"Invalid/missing odds for horse draw {draw}, odds={horse['odds']}")
+                    horse['odds'] = None  # Mark for filtering
             return horses
 
         except Exception as e:
@@ -262,7 +267,7 @@ class MLService:
                 'race_class': race_info.get('race_class', 'Class 4') if race_info else 'Class 4',
                 'track_type': race_info.get('track_type', 'Turf') if race_info else 'Turf',
                 'track_condition': race_info.get('track_condition', 'Good') if race_info else 'Good',
-                'odds': 0  # Remove hardcoded odds from features (not predictive)
+                'odds': horse.get('odds', 10.0)  # Use real market odds
             }
 
             # Calculate horse stats using historical data
@@ -337,11 +342,6 @@ class MLService:
             # Calculate stats
             avg_position = np.mean(positions) if positions else 7.0
             win_rate = len([p for p in positions if p == 1]) / len(positions) if positions else 0.0
-            # Calculate estimated average odds based on performance
-            # Better horses (lower avg_position, higher win_rate) have lower odds
-            performance_score = win_rate * 2 + (8 - avg_position) / 7
-            avg_odds = max(2.0, 25.0 - performance_score * 15)
-
             # Weight trend (recent - older)
             weight_trend = 0
             if len(weights) >= 2:
@@ -356,7 +356,6 @@ class MLService:
                 'recent_avg_position': float(avg_position),
                 'recent_win_rate': float(win_rate),
                 'career_races': len(performances),
-                'avg_odds': float(avg_odds),
                 'weight_trend': float(weight_trend)
             }
 
@@ -366,7 +365,6 @@ class MLService:
                 'recent_avg_position': 7.0,
                 'recent_win_rate': 0.0,
                 'career_races': 0,
-                'avg_odds': 10.0,
                 'weight_trend': 0
             }
 
@@ -644,10 +642,7 @@ class MLService:
                 return {
                     'field_size': 12,
                     'season': 6,
-                    'is_handicap': 0,
-                    'avg_field_odds': 10.0,
-                    'odds_variance': 5.0,
-                    'avg_odds': 10.0
+                    'is_handicap': 0
                 }
 
             row = result.iloc[0]
@@ -655,10 +650,7 @@ class MLService:
             return {
                 'field_size': row['field_size'],
                 'season': pd.to_datetime(race_date).month,
-                'is_handicap': 1 if '班' in str(row['race_class']) else 0,
-                'avg_field_odds': 0,  # Remove hardcoded odds
-                'odds_variance': 0,     # Remove hardcoded odds
-                'avg_odds': 0          # Remove hardcoded odds
+                'is_handicap': 1 if '班' in str(row['race_class']) else 0
             }
 
         except Exception as e:
@@ -666,10 +658,7 @@ class MLService:
             return {
                 'field_size': 12,
                 'season': 6,
-                'is_handicap': 0,
-                'avg_field_odds': 0,
-                'odds_variance': 0,
-                'avg_odds': 0
+                'is_handicap': 0
             }
 
     def _engineer_derived_features_single(self, features: Dict) -> Dict:
