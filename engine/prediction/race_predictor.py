@@ -216,29 +216,34 @@ class RacePredictor:
                 'track': track
             }
 
-        # Apply professional calibration to all probabilities at once
+        # FIXED: Remove harmful power-law calibration that was flattening probabilities
+        # Instead use simple normalization that preserves the ranking from market odds
         if raw_probabilities:
-            calibrated_probs = self.professional_calibrator.calibrate(raw_probabilities)
+            # Simple normalization - just scale so they sum to 1.0
+            total_raw = sum(raw_probabilities)
+            if total_raw > 0:
+                normalized_probs = [p / total_raw for p in raw_probabilities]
+            else:
+                normalized_probs = raw_probabilities
             
-            # Update predictions with calibrated probabilities and calculate values
-            for pred, cal_prob in zip(predictions, calibrated_probs):
-                pred['win_probability'] = float(cal_prob * 100)  # Convert to percentage
+            # Update predictions with normalized probabilities and calculate values
+            for pred, norm_prob in zip(predictions, normalized_probs):
+                pred['win_probability'] = float(norm_prob * 100)  # Convert to percentage
                 
-                # Calculate value using calibrated probability only if odds are available
+                # Calculate value using normalized probability only if odds are available
                 if pred['current_odds'] is not None and pred['current_odds'] > 0:
                     implied_prob = 1.0 / pred['current_odds']
-                    value_ratio = ((implied_prob - cal_prob) / cal_prob)
+                    value_ratio = ((implied_prob - norm_prob) / norm_prob)
                     pred['value_pct'] = float(value_ratio * 100)
                 else:
                     pred['value_pct'] = None  # No odds available for future races
                 
                 # Update mathematical explanation
-                pred['mathematical_explanation']['calibrated_prob'] = float(cal_prob)
-                pred['mathematical_explanation']['calibration_reduction'] = float((pred['raw_probability'] - cal_prob) / pred['raw_probability'] * 100) if pred['raw_probability'] > 0 else 0
-                pred['mathematical_explanation']['final_calibrated_prob'] = float(cal_prob)
+                pred['mathematical_explanation']['normalized_prob'] = float(norm_prob)
+                pred['mathematical_explanation']['normalization_factor'] = float(1.0 / total_raw) if total_raw > 0 else 1.0
+                pred['mathematical_explanation']['final_prob'] = float(norm_prob)
 
-        # Probabilities are already normalized by professional calibrator
-        # Just ensure they sum to exactly 100%
+        # Ensure probabilities sum to exactly 100%
         win_prob_sum = sum(p['win_probability'] for p in predictions)
         if abs(win_prob_sum - 100.0) > 0.1:  # Small adjustment if needed
             scale_factor = 100.0 / win_prob_sum
@@ -273,6 +278,39 @@ class RacePredictor:
             'analysis': self._generate_race_analysis(predictions, race_info, race_number, track)
         }
     
+    def _is_high_confidence_pick(self, predictions: List[Dict]) -> tuple[bool, str]:
+        """
+        Determine if the top prediction is a high-confidence selection.
+        
+        Returns:
+            Tuple of (is_valid_pick, reason)
+        """
+        if not predictions or len(predictions) < 2:
+            return False, "Insufficient predictions"
+        
+        sorted_preds = sorted(predictions, key=lambda x: x['win_probability'], reverse=True)
+        top_pick = sorted_preds[0]
+        second_pick = sorted_preds[1]
+        
+        # Check 1: Top pick must have win probability > 20%
+        if top_pick['win_probability'] < 20:
+            return False, f"Win probability too low ({top_pick['win_probability']:.1f}% < 20%)"
+        
+        # Check 2: Must have minimum 5% gap to second place
+        prob_gap = top_pick['win_probability'] - second_pick['win_probability']
+        if prob_gap < 5.0:
+            return False, f"Probability gap too small ({prob_gap:.1f}% < 5%)"
+        
+        # Check 3: Confidence must be high (>0.70)
+        if top_pick['confidence'] < 0.70:
+            return False, f"Confidence too low ({top_pick['confidence']*100:.1f}% < 70%)"
+        
+        # Check 4: For higher confidence, odds should be reasonable (< 15)
+        if top_pick.get('current_odds', 99) > 15:
+            return False, f"Odds too long ({top_pick['current_odds']:.1f} > 15)"
+        
+        return True, "High confidence selection"
+    
     def _generate_race_analysis(self, predictions: List[Dict], race_info: Dict, race_number: int = None, track: str = None) -> str:
         """Generate a human-readable analysis of the race."""
         if not predictions:
@@ -287,6 +325,15 @@ class RacePredictor:
         
         analysis = []
         analysis.append(f"Race Analysis for Race {race_num} at {track_name}:")
+        
+        # Check if this is a high-confidence selection
+        is_valid, reason = self._is_high_confidence_pick(predictions)
+        if is_valid:
+            analysis.append("✅ RECOMMENDED BET - High confidence selection")
+        else:
+            analysis.append(f"⚠️  NOT RECOMMENDED - {reason}")
+        
+        analysis.append("")
         
         # Top selection
         analysis.append(f"Primary Selection: {top_pick['horse_name']} (#{top_pick['horse_number']})")

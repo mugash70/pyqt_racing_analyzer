@@ -17,13 +17,14 @@ logger = logging.getLogger(__name__)
 class ModelConfig:
     """Configuration for ensemble model parameters."""
     
-    # Feature weights
-    odds_weight: float = 0.30
-    form_weight: float = 0.25
-    track_score_weight: float = 0.15
-    universal_score_weight: float = 0.10
-    jockey_weight: float = 0.10
-    trainer_weight: float = 0.10
+    # Feature weights - INCREASED market odds weight for better accuracy
+    # Market odds reflect collective wisdom and are the strongest predictor
+    odds_weight: float = 0.55      # Increased from 0.30 - market knows best
+    form_weight: float = 0.20      # Reduced from 0.25
+    track_score_weight: float = 0.10   # Reduced from 0.15
+    universal_score_weight: float = 0.05   # Reduced from 0.10
+    jockey_weight: float = 0.05    # Reduced from 0.10
+    trainer_weight: float = 0.05   # Reduced from 0.10
     
     # Model weights
     xgboost_weight: float = 0.4

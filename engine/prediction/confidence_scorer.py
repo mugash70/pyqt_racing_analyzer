@@ -33,13 +33,22 @@ class ConfidenceScorer:
         if not (0 <= xgboost_prob <= 1 and 0 <= neural_net_prob <= 1):
             return self.min_confidence
         
+        # Agreement between XGBoost and NN models
         agreement_distance = abs(xgboost_prob - neural_net_prob)
         agreement_score = 1.0 - min(0.5, agreement_distance)
         
+        # Consistency between model average and final probability
         average_prediction = (xgboost_prob + neural_net_prob) / 2
         prediction_consistency = 1.0 - abs(average_prediction - win_probability)
         
-        ensemble_confidence = (agreement_score * 0.7 + prediction_consistency * 0.3)
+        # Boost confidence for high probability horses (strong favorites)
+        probability_boost = 0.0
+        if win_probability > 0.20:  # 20%+ win probability
+            probability_boost = 0.10
+        elif win_probability > 0.15:  # 15%+ win probability
+            probability_boost = 0.05
+        
+        ensemble_confidence = (agreement_score * 0.6 + prediction_consistency * 0.3 + probability_boost)
         
         return float(np.clip(ensemble_confidence, self.min_confidence, self.max_confidence))
     
