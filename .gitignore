@@ -23,7 +23,7 @@ wheels/
 # PyInstaller
 build/
 dist/
-*.spec
+# *.spec
 
 # Virtual Environment
 venv/
