@@ -63,9 +63,9 @@ ENV/
 htmlcov/
 
 # OS
-Thumbs.db
-.DS_Store
+# Thumbs.db
+# .DS_Store
 
 # Project specific
-hkjc_terminal.log
+# hkjc_terminal.log
 hkjc_racesx.db

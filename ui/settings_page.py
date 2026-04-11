@@ -543,28 +543,29 @@ class SettingsPage(QWidget):
         import sqlite3
         import os
         
-        db_path = os.path.join(os.path.dirname(__file__), '..', '..', 'hkjc_races.db')
+        # Fixed: Correct path to database
+        db_path = os.path.join(os.path.dirname(__file__), '..', '..', 'database', 'hkjc_races.db')
         
         try:
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
             
-            # Total races
-            cursor.execute("SELECT COUNT(*) FROM races")
+            # Fixed: Correct table name
+            cursor.execute("SELECT COUNT(*) FROM race_results")
             total_races = cursor.fetchone()[0]
             
-            # Total horses
-            cursor.execute("SELECT COUNT(*) FROM horses")
-            total_horses = cursor.fetchone()[0]
+            # Fixed: Get count from future_race_cards (predictions)
+            cursor.execute("SELECT COUNT(*) FROM future_race_cards")
+            total_cards = cursor.fetchone()[0]
             
-            # Last update (most recent scraped race)
-            cursor.execute("SELECT MAX(scraped_at) FROM races")
+            # Fixed: Last update from race_results
+            cursor.execute("SELECT MAX(scraped_at) FROM race_results")
             last_update = cursor.fetchone()[0]
             
             conn.close()
             
-            self.total_races_label.setText(str(total_races))
-            self.total_horses_label.setText(str(total_horses))
+            self.total_races_label.setText(f"{total_races:,}")
+            self.total_horses_label.setText(f"{total_cards:,}")
             self.last_update_label.setText(last_update if last_update else "Never")
             
         except Exception as e:

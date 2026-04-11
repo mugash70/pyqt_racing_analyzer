@@ -681,3 +681,245 @@ class DataIntegrator:
         finally:
             conn.close()
 
+    def get_jockey_ranking(self, jockey_name: str) -> Optional[Dict]:
+        """Get jockey ranking data from jockey_rankings table."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """SELECT rank, wins, seconds, thirds, rides, win_rate, place_rate 
+                   FROM jockey_rankings 
+                   WHERE jockey_name = ? 
+                   ORDER BY scraped_at DESC LIMIT 1""",
+                (jockey_name,)
+            )
+            result = cursor.fetchone()
+            if result:
+                rank, wins, seconds, thirds, rides, win_rate, place_rate = result
+                return {
+                    'rank': rank,
+                    'wins': wins or 0,
+                    'seconds': seconds or 0,
+                    'thirds': thirds or 0,
+                    'rides': rides or 0,
+                    'win_rate': win_rate or 0.0,
+                    'place_rate': place_rate or 0.0,
+                    'rank_pct': 1.0 - (rank / 100) if rank else 0.5
+                }
+            return None
+        finally:
+            conn.close()
+
+    def get_trainer_ranking(self, trainer_name: str) -> Optional[Dict]:
+        """Get trainer ranking data from trainer_rankings table."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """SELECT rank, wins, seconds, thirds, runners, win_rate, place_rate 
+                   FROM trainer_rankings 
+                   WHERE trainer_name = ? 
+                   ORDER BY scraped_at DESC LIMIT 1""",
+                (trainer_name,)
+            )
+            result = cursor.fetchone()
+            if result:
+                rank, wins, seconds, thirds, runners, win_rate, place_rate = result
+                return {
+                    'rank': rank,
+                    'wins': wins or 0,
+                    'seconds': seconds or 0,
+                    'thirds': thirds or 0,
+                    'runners': runners or 0,
+                    'win_rate': win_rate or 0.0,
+                    'place_rate': place_rate or 0.0,
+                    'rank_pct': 1.0 - (rank / 100) if rank else 0.5
+                }
+            return None
+        finally:
+            conn.close()
+
+    def get_barrier_trial_data(self, horse_name: str, limit: int = 5) -> List[Dict]:
+        """Get barrier trial data for a horse."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """SELECT test_date, barrier, time, remarks 
+                   FROM barrier_tests 
+                   WHERE horse_name = ? 
+                   ORDER BY test_date DESC LIMIT ?""",
+                (horse_name, limit)
+            )
+            results = []
+            for row in cursor.fetchall():
+                results.append({
+                    'date': row[0],
+                    'barrier': row[1],
+                    'time': row[2],
+                    'remarks': row[3]
+                })
+            return results
+        finally:
+            conn.close()
+
+    def get_track_selection_data(self, race_date: str, racecourse: str) -> Optional[Dict]:
+        """Get track selection data for a race day."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """SELECT track_type, course_setting, selection_stats 
+                   FROM track_selection_data 
+                   WHERE race_date = ? AND racecourse = ? 
+                   ORDER BY scraped_at DESC LIMIT 1""",
+                (race_date, racecourse)
+            )
+            result = cursor.fetchone()
+            if result:
+                track_type, course_setting, selection_stats = result
+                return {
+                    'track_type': track_type,
+                    'course_setting': course_setting,
+                    'selection_stats': selection_stats
+                }
+            return None
+        finally:
+            conn.close()
+
+    def get_jockey_track_performance(self, jockey_name: str, track: str) -> Dict:
+        """Get jockey's performance at a specific track."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """SELECT COUNT(*) as rides,
+                          SUM(CASE WHEN position = 1 THEN 1 ELSE 0 END) as wins,
+                          SUM(CASE WHEN position <= 3 THEN 1 ELSE 0 END) as places
+                   FROM race_results 
+                   WHERE jockey = ? AND racecourse = ?""",
+                (jockey_name, track)
+            )
+            row = cursor.fetchone()
+            rides = row[0] or 0
+            wins = row[1] or 0
+            places = row[2] or 0
+            
+            return {
+                'rides': rides,
+                'wins': wins,
+                'places': places,
+                'win_rate': (wins / rides * 100) if rides > 0 else 0,
+                'place_rate': (places / rides * 100) if rides > 0 else 0
+            }
+        finally:
+            conn.close()
+
+    def get_trainer_track_performance(self, trainer_name: str, track: str) -> Dict:
+        """Get trainer's performance at a specific track."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """SELECT COUNT(*) as runners,
+                          SUM(CASE WHEN position = 1 THEN 1 ELSE 0 END) as wins,
+                          SUM(CASE WHEN position <= 3 THEN 1 ELSE 0 END) as places
+                   FROM race_results 
+                   WHERE trainer = ? AND racecourse = ?""",
+                (trainer_name, track)
+            )
+            row = cursor.fetchone()
+            runners = row[0] or 0
+            wins = row[1] or 0
+            places = row[2] or 0
+            
+            return {
+                'runners': runners,
+                'wins': wins,
+                'places': places,
+                'win_rate': (wins / runners * 100) if runners > 0 else 0,
+                'place_rate': (places / runners * 100) if runners > 0 else 0
+            }
+        finally:
+            conn.close()
+
+    def get_jockey_distance_performance(self, jockey_name: str, distance: str) -> Dict:
+        """Get jockey's performance at a specific distance."""
+        conn = self._get_connection()
+        try:
+            # Extract numeric distance
+            import re
+            distance_match = re.search(r'(\d+)', str(distance))
+            if distance_match:
+                target_distance = distance_match.group(1)
+            else:
+                target_distance = distance
+            
+            query = """
+                SELECT r.position, f.race_distance
+                FROM race_results r
+                JOIN future_race_cards f 
+                  ON DATE(r.race_date) = DATE(f.race_date) 
+                  AND r.race_number = f.race_number
+                  AND r.racecourse = f.racecourse
+                WHERE r.jockey = ? AND f.race_distance LIKE ?
+            """
+            df = pd.read_sql_query(query, conn, params=(jockey_name, f"%{target_distance}%"))
+            
+            if df.empty:
+                return {'rides': 0, 'wins': 0, 'places': 0, 'win_rate': 0, 'place_rate': 0}
+            
+            rides = len(df)
+            wins = len(df[df['position'] == 1])
+            places = len(df[df['position'] <= 3])
+            
+            return {
+                'rides': rides,
+                'wins': wins,
+                'places': places,
+                'win_rate': (wins / rides * 100) if rides > 0 else 0,
+                'place_rate': (places / rides * 100) if rides > 0 else 0
+            }
+        finally:
+            conn.close()
+
+    def get_trainer_distance_performance(self, trainer_name: str, distance: str) -> Dict:
+        """Get trainer's performance at a specific distance."""
+        conn = self._get_connection()
+        try:
+            # Extract numeric distance
+            import re
+            distance_match = re.search(r'(\d+)', str(distance))
+            if distance_match:
+                target_distance = distance_match.group(1)
+            else:
+                target_distance = distance
+            
+            query = """
+                SELECT r.position, f.race_distance
+                FROM race_results r
+                JOIN future_race_cards f 
+                  ON DATE(r.race_date) = DATE(f.race_date) 
+                  AND r.race_number = f.race_number
+                  AND r.racecourse = f.racecourse
+                WHERE r.trainer = ? AND f.race_distance LIKE ?
+            """
+            df = pd.read_sql_query(query, conn, params=(trainer_name, f"%{target_distance}%"))
+            
+            if df.empty:
+                return {'runners': 0, 'wins': 0, 'places': 0, 'win_rate': 0, 'place_rate': 0}
+            
+            runners = len(df)
+            wins = len(df[df['position'] == 1])
+            places = len(df[df['position'] <= 3])
+            
+            return {
+                'runners': runners,
+                'wins': wins,
+                'places': places,
+                'win_rate': (wins / runners * 100) if runners > 0 else 0,
+                'place_rate': (places / runners * 100) if runners > 0 else 0
+            }
+        finally:
+            conn.close()
+

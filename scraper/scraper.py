@@ -18,9 +18,9 @@ logger = logging.getLogger(__name__)
 class HKJCResultsScraper:
     """Scraper for HKJC racing information."""
     
-    BASE_URL = "https://racing.hkjc.com/zh-hk/local/information"
-    INFO_URL = "https://racing.hkjc.com/zh-hk/local/info"
-    PAGE_URL = "https://racing.hkjc.com/zh-hk/local/page"
+    BASE_URL = "https://racing.hkjc.com/en-us/local/information"
+    INFO_URL = "https://racing.hkjc.com/en-us/local/info"
+    PAGE_URL = "https://racing.hkjc.com/en-us/local/page"
     
     def __init__(self):
         self.session = requests.Session()
@@ -889,8 +889,15 @@ class HKJCResultsScraper:
                             for i in range(1, 11):
                                 points.append(int(cols[i].text.strip()) if cols[i].text.strip().isdigit() else 0)
                             
-                            avg_points = float(cols[11].text.strip()) if cols[11].text.strip() else 0.0
-                            season_avg = float(cols[13].text.strip()) if len(cols) > 13 and cols[13].text.strip() else 0.0
+                            # Fix: Handle '-' and empty values in float conversion
+                            def safe_float(text):
+                                try:
+                                    return float(text.strip()) if text and text.strip() != '-' else 0.0
+                                except (ValueError, AttributeError):
+                                    return 0.0
+                            
+                            avg_points = safe_float(cols[11].text)
+                            season_avg = safe_float(cols[13].text) if len(cols) > 13 else 0.0
                             
                             stats.append({
                                 'race_date': datetime.now().strftime('%Y-%m-%d'),

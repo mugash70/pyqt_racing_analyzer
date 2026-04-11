@@ -124,7 +124,19 @@ class EnhancedFeatureEngineer:
                 'form_pattern': 'unknown'
             }
         
-        positions = [r['position'] for r in results if r['position']]
+        # Clean position data - extract first numeric value from strings
+        import re
+        positions = []
+        for r in results:
+            if r['position']:
+                pos_str = str(r['position'])
+                # Extract first number from string (handles newlines, spaces, etc.)
+                match = re.search(r'\d+', pos_str)
+                if match:
+                    try:
+                        positions.append(int(match.group()))
+                    except (ValueError, TypeError):
+                        continue
         
         if not positions:
             return {'form_available': 0.0, 'last_5_avg': 8.0, 'last_10_avg': 8.0}
@@ -136,7 +148,7 @@ class EnhancedFeatureEngineer:
         # Exponential weighting (recent races weighted more)
         weights_5 = np.exp(np.arange(len(last_5)) / 1.5)
         weights_5 = weights_5 / weights_5.sum()
-        last_5_weighted = np.average(last_5, weights=weights_5)
+        last_5_weighted = np.average(np.array(last_5, dtype=np.float64), weights=weights_5)
         
         # Form trend (improving = negative)
         if len(positions) >= 6:
@@ -219,19 +231,35 @@ class EnhancedFeatureEngineer:
         track_results = [r for r in results if r['racecourse'] == track and r['position']]
         
         if track_results:
-            avg_pos = np.mean([r['position'] for r in track_results])
-            positions = [r['position'] for r in track_results]
+            import re
+            positions = []
+            for r in track_results:
+                if r['position']:
+                    pos_str = str(r['position'])
+                    match = re.search(r'\d+', pos_str)
+                    if match:
+                        try:
+                            positions.append(int(match.group()))
+                        except (ValueError, TypeError):
+                            continue
             
-            # Calculate track score (0-100)
-            win_component = perf['win_rate'] * 3
-            place_component = perf['place_rate'] * 1.5
-            position_component = max(0, 100 - (avg_pos * 8))
-            
-            track_score = (win_component + place_component + position_component) / 3
-            track_score = np.clip(track_score, 0, 100)
-            
-            # Track favorite (wins > 20% or places > 50%)
-            is_favorite = 1.0 if perf['win_rate'] > 20 or perf['place_rate'] > 50 else 0.0
+            if not positions:
+                avg_pos = 8.0
+                track_score = 50.0
+                is_favorite = 0.0
+            else:
+                avg_pos = np.mean(positions)
+                
+                # Calculate track score (0-100)
+                win_component = perf['win_rate'] * 3
+                place_component = perf['place_rate'] * 1.5
+                position_component = max(0, 100 - (avg_pos * 8))
+                
+                track_score = (win_component + place_component + position_component) / 3
+                track_score = np.clip(track_score, 0, 100)
+                
+                # Track favorite (wins > 20% or places > 50%)
+                is_favorite = 1.0 if perf['win_rate'] > 20 or perf['place_rate'] > 50 else 0.0
         else:
             avg_pos = 8.0
             track_score = 50.0
@@ -297,7 +325,28 @@ class EnhancedFeatureEngineer:
                 'class_rising': 0.0
             }
         
-        positions = [r['position'] for r in horse_results]
+        import re
+        positions = []
+        for r in horse_results:
+            if r.get('position'):
+                pos_str = str(r['position'])
+                match = re.search(r'\d+', pos_str)
+                if match:
+                    try:
+                        positions.append(int(match.group()))
+                    except (ValueError, TypeError):
+                        continue
+        
+        if not positions:
+            return {
+                'class_experience': 0.0,
+                'class_win_rate': 0.0,
+                'class_place_rate': 0.0,
+                'class_score': 50.0,
+                'class_dropping': 0.0,
+                'class_rising': 0.0
+            }
+        
         wins = sum(1 for p in positions if p == 1)
         places = sum(1 for p in positions if p <= 3)
         
@@ -318,20 +367,29 @@ class EnhancedFeatureEngineer:
         }
     
     def _extract_jockey_features(self, jockey: str, track: str, distance: str, race_class: str) -> Dict:
-        """Extract comprehensive jockey features."""
+        """Extract comprehensive jockey features with track and distance specialization."""
         if not jockey:
             return {
                 'jockey_win_rate': 0.08,
                 'jockey_place_rate': 0.25,
                 'jockey_score': 50.0,
                 'jockey_track_win_rate': 0.08,
-                'jockey_experience': 0.0
+                'jockey_distance_win_rate': 0.08,
+                'jockey_experience': 0.0,
+                'jockey_rank': 99.0,
+                'jockey_rank_pct': 0.5
             }
         
         stats = self.data.get_jockey_stats(jockey)
         
         # Get jockey ranking if available
         ranking_data = self._get_jockey_ranking(jockey)
+        
+        # Get track-specific performance
+        track_perf = self.data.get_jockey_track_performance(jockey, track)
+        
+        # Get distance-specific performance
+        distance_perf = self.data.get_jockey_distance_performance(jockey, distance)
         
         # Base jockey score
         base_score = (stats['win_rate'] * 3 + stats['place_rate'] * 1.5) / 2
@@ -341,34 +399,58 @@ class EnhancedFeatureEngineer:
             rank_bonus = max(0, (50 - ranking_data['rank']) / 2)
             base_score += rank_bonus
         
-        # Track-specific jockey performance (if data available)
-        track_win_rate = stats['win_rate']  # Default to overall
+        # Track specialization bonus
+        track_bonus = 0
+        if track_perf['rides'] >= 10:
+            track_bonus = (track_perf['win_rate'] - stats['win_rate']) * 0.5
+        
+        # Distance specialization bonus
+        distance_bonus = 0
+        if distance_perf['rides'] >= 5:
+            distance_bonus = (distance_perf['win_rate'] - stats['win_rate']) * 0.5
+        
+        # Combined score with track/distance adjustments
+        final_score = base_score + track_bonus + distance_bonus
         
         return {
             'jockey_win_rate': float(stats['win_rate'] / 100),
             'jockey_place_rate': float(stats['place_rate'] / 100),
-            'jockey_score': float(np.clip(base_score, 0, 100)),
+            'jockey_score': float(np.clip(final_score, 0, 100)),
             'jockey_total_rides': float(stats['total_races']),
-            'jockey_track_win_rate': float(track_win_rate / 100),
+            'jockey_track_win_rate': float(track_perf['win_rate'] / 100) if track_perf['rides'] > 0 else float(stats['win_rate'] / 100),
+            'jockey_track_rides': float(track_perf['rides']),
+            'jockey_distance_win_rate': float(distance_perf['win_rate'] / 100) if distance_perf['rides'] > 0 else float(stats['win_rate'] / 100),
+            'jockey_distance_rides': float(distance_perf['rides']),
             'jockey_rank': float(ranking_data['rank']) if ranking_data else 99.0,
-            'jockey_rank_pct': float(ranking_data['rank_pct']) if ranking_data else 0.5
+            'jockey_rank_pct': float(ranking_data['rank_pct']) if ranking_data else 0.5,
+            'jockey_is_track_specialist': 1.0 if track_perf['rides'] >= 20 and track_perf['win_rate'] > stats['win_rate'] + 5 else 0.0,
+            'jockey_is_distance_specialist': 1.0 if distance_perf['rides'] >= 10 and distance_perf['win_rate'] > stats['win_rate'] + 5 else 0.0
         }
     
     def _extract_trainer_features(self, trainer: str, track: str, distance: str, race_class: str) -> Dict:
-        """Extract comprehensive trainer features."""
+        """Extract comprehensive trainer features with track and distance specialization."""
         if not trainer:
             return {
                 'trainer_win_rate': 0.10,
                 'trainer_place_rate': 0.28,
                 'trainer_score': 50.0,
                 'trainer_track_win_rate': 0.10,
-                'trainer_experience': 0.0
+                'trainer_distance_win_rate': 0.10,
+                'trainer_experience': 0.0,
+                'trainer_rank': 99.0,
+                'trainer_rank_pct': 0.5
             }
         
         stats = self.data.get_trainer_stats(trainer)
         
         # Get trainer ranking if available
         ranking_data = self._get_trainer_ranking(trainer)
+        
+        # Get track-specific performance
+        track_perf = self.data.get_trainer_track_performance(trainer, track)
+        
+        # Get distance-specific performance
+        distance_perf = self.data.get_trainer_distance_performance(trainer, distance)
         
         # Base trainer score
         base_score = (stats['win_rate'] * 3 + stats['place_rate'] * 1.5) / 2
@@ -378,14 +460,32 @@ class EnhancedFeatureEngineer:
             rank_bonus = max(0, (50 - ranking_data['rank']) / 2)
             base_score += rank_bonus
         
+        # Track specialization bonus
+        track_bonus = 0
+        if track_perf['runners'] >= 10:
+            track_bonus = (track_perf['win_rate'] - stats['win_rate']) * 0.5
+        
+        # Distance specialization bonus
+        distance_bonus = 0
+        if distance_perf['runners'] >= 5:
+            distance_bonus = (distance_perf['win_rate'] - stats['win_rate']) * 0.5
+        
+        # Combined score with track/distance adjustments
+        final_score = base_score + track_bonus + distance_bonus
+        
         return {
             'trainer_win_rate': float(stats['win_rate'] / 100),
             'trainer_place_rate': float(stats['place_rate'] / 100),
-            'trainer_score': float(np.clip(base_score, 0, 100)),
+            'trainer_score': float(np.clip(final_score, 0, 100)),
             'trainer_total_runs': float(stats['total_races']),
-            'trainer_track_win_rate': float(stats['win_rate'] / 100),
+            'trainer_track_win_rate': float(track_perf['win_rate'] / 100) if track_perf['runners'] > 0 else float(stats['win_rate'] / 100),
+            'trainer_track_runners': float(track_perf['runners']),
+            'trainer_distance_win_rate': float(distance_perf['win_rate'] / 100) if distance_perf['runners'] > 0 else float(stats['win_rate'] / 100),
+            'trainer_distance_runners': float(distance_perf['runners']),
             'trainer_rank': float(ranking_data['rank']) if ranking_data else 99.0,
-            'trainer_rank_pct': float(ranking_data['rank_pct']) if ranking_data else 0.5
+            'trainer_rank_pct': float(ranking_data['rank_pct']) if ranking_data else 0.5,
+            'trainer_is_track_specialist': 1.0 if track_perf['runners'] >= 20 and track_perf['win_rate'] > stats['win_rate'] + 5 else 0.0,
+            'trainer_is_distance_specialist': 1.0 if distance_perf['runners'] >= 10 and distance_perf['win_rate'] > stats['win_rate'] + 5 else 0.0
         }
     
     def _extract_jockey_trainer_synergy(self, jockey: str, trainer: str) -> Dict:
@@ -419,6 +519,14 @@ class EnhancedFeatureEngineer:
                     positions.append(int(r['position']))
                 except (ValueError, TypeError):
                     continue
+        
+        if not positions:
+            return {
+                'jt_synergy': 0.0,
+                'jt_combo_win_rate': 0.0,
+                'jt_races_together': float(len(results)),
+                'jt_synergy_score': 50.0
+            }
         
         wins = sum(1 for p in positions if p == 1)
         places = sum(1 for p in positions if p <= 3)
@@ -1012,52 +1120,12 @@ class EnhancedFeatureEngineer:
         return interactions
     
     def _get_jockey_ranking(self, jockey: str) -> Optional[Dict]:
-        """Get jockey ranking data."""
-        try:
-            conn = self.data._get_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT rank, total_rides, win_pct FROM jockey_rankings WHERE jockey = ?",
-                (jockey,)
-            )
-            result = cursor.fetchone()
-            conn.close()
-            
-            if result:
-                rank, total, win_pct = result
-                return {
-                    'rank': rank,
-                    'total_rides': total,
-                    'win_pct': win_pct,
-                    'rank_pct': 1.0 - (rank / 100) if rank else 0.5
-                }
-        except:
-            pass
-        return None
+        """Get jockey ranking data using DataIntegrator."""
+        return self.data.get_jockey_ranking(jockey)
     
     def _get_trainer_ranking(self, trainer: str) -> Optional[Dict]:
-        """Get trainer ranking data."""
-        try:
-            conn = self.data._get_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT rank, total_runs, win_pct FROM trainer_rankings WHERE trainer = ?",
-                (trainer,)
-            )
-            result = cursor.fetchone()
-            conn.close()
-            
-            if result:
-                rank, total, win_pct = result
-                return {
-                    'rank': rank,
-                    'total_runs': total,
-                    'win_pct': win_pct,
-                    'rank_pct': 1.0 - (rank / 100) if rank else 0.5
-                }
-        except:
-            pass
-        return None
+        """Get trainer ranking data using DataIntegrator."""
+        return self.data.get_trainer_ranking(trainer)
     
     def _extract_wind_features(self, race_date: str, track: str) -> Dict:
         """Extract wind tracker features."""

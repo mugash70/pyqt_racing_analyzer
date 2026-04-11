@@ -37,8 +37,8 @@ class DataRefreshWorker(QThread):
             }
             
             # Import pipeline components
-            from backup_scraper.pipeline import HKJCDataPipeline
-            from backup_scraper.scraper import HKJCResultsScraper
+            from scraper.pipeline import HKJCDataPipeline
+            from scraper.scraper import HKJCResultsScraper
             
             self.progress.emit("Initializing data pipeline...")
             self.stage_changed.emit("initializing")
@@ -46,71 +46,77 @@ class DataRefreshWorker(QThread):
             pipeline = HKJCDataPipeline()
             scraper = HKJCResultsScraper()
             
-            # Get available dates
-            self.progress.emit("Fetching available dates from HKJC...")
+            # Generate dates to scrape (last N days)
+            self.progress.emit(f"Generating dates for last {self.lookback_days} days...")
             self.stage_changed.emit("fetching_dates")
             
-            available_dates = scraper.get_available_dates()
-            self.progress.emit(f"Found {len(available_dates)} available dates")
+            # Generate dates from today going back lookback_days
+            dates_to_scrape = []
+            for i in range(self.lookback_days):
+                date = datetime.now() - timedelta(days=i)
+                # Only include Wednesdays and weekends (typical race days)
+                if date.weekday() in [2, 5, 6]:  # Wed=2, Sat=5, Sun=6
+                    dates_to_scrape.append(date)
             
-            # Filter dates within lookback period
-            cutoff_date = datetime.now() - timedelta(days=self.lookback_days)
-            dates_to_scrape = [d for d in available_dates if d >= cutoff_date]
-            
-            self.progress.emit(f"Processing {len(dates_to_scrape)} dates (last {self.lookback_days} days)")
+            self.progress.emit(f"Found {len(dates_to_scrape)} potential race dates")
             results['dates_processed'] = len(dates_to_scrape)
             
             total_races = 0
-            updated_races = 0
             
-            for i, race_date in enumerate(dates_to_scrape):
-                try:
-                    date_str = race_date.strftime("%Y-%m-%d")
-                    self.progress.emit(f"Scraping data for {date_str}...")
-                    self.stage_changed.emit(f"scraping_{date_str}")
-                    
-                    # Check if date already scraped
-                    if pipeline._date_already_scraped(race_date):
-                        self.progress.emit(f"  Data for {date_str} already exists, skipping...")
-                        continue
-                    
-                    # Scrape races for this date
-                    races = scraper.parse_results_page(race_date)
-                    
-                    races_saved = 0
-                    for race in races:
-                        if pipeline.save_race_data(race):
-                            races_saved += 1
-                            total_races += 1
+            # Try both racecourses
+            racecourses = ["ST", "HV"]
+            
+            for race_date in dates_to_scrape:
+                date_str = race_date.strftime("%Y-%m-%d")
+                self.progress.emit(f"Scraping data for {date_str}...")
+                self.stage_changed.emit(f"scraping_{date_str}")
+                
+                for racecourse in racecourses:
+                    try:
+                        # Scrape race results for this date and course
+                        records = pipeline.save_race_results(date_str, racecourse)
+                        
+                        if records > 0:
+                            total_races += records
+                            self.races_scraped.emit(total_races)
+                            self.progress.emit(f"  Saved {records} records from {date_str} at {racecourse}")
                             
-                            # Emit signal for each race appended
-                            self.data_appended.emit({
-                                'date': date_str,
-                                'race_number': race.get('race_number'),
-                                'distance': race.get('distance'),
-                                'horse_count': len(race.get('positions', []))
-                            })
-                    
-                    updated_races = races_saved
-                    self.races_scraped.emit(total_races)
-                    
-                    self.progress.emit(f"  Saved {races_saved} races from {date_str}")
-                    
-                    # Rate limiting
-                    self.msleep(500)
-                    
-                except Exception as e:
-                    error_msg = f"Error processing {race_date}: {str(e)}"
-                    self.logger.error(error_msg)
-                    results['errors'].append(error_msg)
-                    self.progress.emit(f"  ERROR: {error_msg}")
+                            # Also try to scrape race cards and weather
+                            try:
+                                pipeline.save_future_race_cards(date_str, racecourse)
+                            except Exception:
+                                pass
+                            try:
+                                pipeline.save_weather(date_str, racecourse)
+                            except Exception:
+                                pass
+                        
+                        # Rate limiting between courses
+                        self.msleep(200)
+                        
+                    except Exception as e:
+                        error_msg = f"Error scraping {date_str} at {racecourse}: {str(e)}"
+                        self.logger.error(error_msg)
+                        results['errors'].append(error_msg)
+                        self.progress.emit(f"  ERROR: {error_msg}")
+                
+                # Rate limiting between dates
+                self.msleep(500)
+            
+            # Also sync general data that doesn't depend on dates
+            self.progress.emit("Syncing general rankings and stats...")
+            self.stage_changed.emit("syncing_general")
+            try:
+                rankings = pipeline.sync_all_rankings()
+                self.progress.emit(f"  Synced {rankings} ranking records")
+            except Exception as e:
+                self.progress.emit(f"  Warning: Could not sync rankings: {e}")
             
             results['races_scraped'] = total_races
-            results['races_updated'] = updated_races
             results['end_time'] = datetime.now()
             results['duration_seconds'] = (results['end_time'] - results['start_time']).total_seconds()
             
-            self.progress.emit(f"Data refresh complete! Scraped {total_races} races in {results['duration_seconds']:.1f} seconds")
+            self.progress.emit(f"Data refresh complete! Scraped {total_races} race records in {results['duration_seconds']:.1f} seconds")
             self.stage_changed.emit("completed")
             self.finished.emit(results)
             

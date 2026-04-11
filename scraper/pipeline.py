@@ -30,6 +30,37 @@ class HKJCDataPipeline:
     def _get_connection(self):
         return sqlite3.connect(self.db_path)
 
+    def has_fixtures_for_date(self, race_date: str) -> bool:
+        """Check if fixtures exist for a given date in the database or via scraper."""
+        try:
+            # First check if we already have fixtures in the database
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM fixtures WHERE DATE(race_date) = ?", (race_date,))
+            count = cursor.fetchone()[0]
+            conn.close()
+            
+            if count > 0:
+                logger.info(f"Found {count} existing fixtures for {race_date}")
+                return True
+            
+            # If not in DB, try to scrape fixtures for the date
+            logger.info(f"No fixtures in database for {race_date}, attempting to scrape...")
+            fixtures = self.scraper.scrape_fixtures()
+            if fixtures:
+                # Check if any fixture matches the requested date
+                for fixture in fixtures:
+                    if fixture.get('race_date') == race_date:
+                        # Save fixtures to database for future use
+                        self.save_fixtures()
+                        return True
+            
+            logger.warning(f"No fixtures available for {race_date}")
+            return False
+        except Exception as e:
+            logger.error(f"Error checking fixtures for {race_date}: {e}")
+            return False
+
     def _initialize_new_tables(self):
         """Create new tables if they don't exist and migrate schema if needed."""
         conn = self._get_connection()
@@ -1398,6 +1429,11 @@ class HKJCDataPipeline:
         conn.close()
         return count
 
+
+    def save_form_line(self, race_date, racecourse: str) -> int:
+        """Stub method for saving form line data."""
+        logger.info(f"Form line save not yet implemented for {race_date} at {racecourse}")
+        return 0
 
     def sync_professional_schedules(self, race_date: str, *args, **kwargs) -> int:
         """Sync jockey and trainer schedules."""

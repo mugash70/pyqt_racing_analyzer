@@ -37,6 +37,7 @@ try:
     from .ui.retraining_dialog import RetrainingDialog
     from .ui.prediction_detail_modal import RacePredictionModal
     from .ui.prediction_dashboard import PredictionDetailModal
+    from .ui.fixtures_browser import FixturesBrowser
 except ImportError:
     from ui.styles import COLORS, APP_STYLESHEET
     from ui.loading_screen import LoadingScreen
@@ -48,6 +49,7 @@ except ImportError:
     from ui.retraining_dialog import RetrainingDialog
     from ui.prediction_detail_modal import RacePredictionModal
     from ui.prediction_dashboard import PredictionDetailModal
+    from ui.fixtures_browser import FixturesBrowser
 
 
 class DataLoadingWorker(QThread):
@@ -81,6 +83,14 @@ class DataLoadingWorker(QThread):
             self.pipeline = HKJCDataPipeline()
             today = datetime.now()
             today_str = today.strftime("%Y-%m-%d")
+            
+            # Check if fixtures exist for today before attempting to scrape
+            self.progress_update.emit("檢查賽程安排...", 8)
+            if not self.pipeline.has_fixtures_for_date(today_str):
+                logger.info(f"No race fixtures found for {today_str} - skipping data fetch")
+                self.progress_update.emit(f"{today_str} 無賽事安排，跳過數據獲取", 100)
+                self.loading_complete.emit()
+                return
             
             # Check if data already exists for today
             def data_exists_for_today(table_name):
@@ -530,6 +540,7 @@ class MainWindow(QMainWindow):
         self.nav_items_map = {}
         nav_items = [
             ("DASHBOARD", "overview"),
+            ("FIXTURES", "fixtures"),
             ("ANALYTICS", "analytics"),
             ("DATABASE", "database"),
             ("SETTINGS", "settings")
@@ -650,6 +661,10 @@ class MainWindow(QMainWindow):
         else:
             self.dashboard = self._create_dashboard()
         self.content_stack.addWidget(self.dashboard)
+        
+        # Fixtures Browser
+        self.fixtures_tab = FixturesBrowser()
+        self.content_stack.addWidget(self.fixtures_tab)
         
         # Analytics
         self.analytics_tab = AnalysisTab()

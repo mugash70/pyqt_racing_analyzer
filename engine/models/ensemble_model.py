@@ -17,14 +17,15 @@ logger = logging.getLogger(__name__)
 class ModelConfig:
     """Configuration for ensemble model parameters."""
     
-    # Feature weights - INCREASED market odds weight for better accuracy
-    # Market odds reflect collective wisdom and are the strongest predictor
-    odds_weight: float = 0.55      # Increased from 0.30 - market knows best
-    form_weight: float = 0.20      # Reduced from 0.25
-    track_score_weight: float = 0.10   # Reduced from 0.15
-    universal_score_weight: float = 0.05   # Reduced from 0.10
-    jockey_weight: float = 0.05    # Reduced from 0.10
-    trainer_weight: float = 0.05   # Reduced from 0.10
+    # Feature weights - BALANCED for accuracy with enhanced features
+    # Market odds reflect collective wisdom but don't dominate
+    odds_weight: float = 0.45      # Reduced slightly - market is important but not everything
+    form_weight: float = 0.20      # Horse form is critical
+    track_score_weight: float = 0.10   # Track specialization
+    universal_score_weight: float = 0.05   # Overall capability
+    jockey_weight: float = 0.08    # INCREASED - now with track/distance specialization
+    trainer_weight: float = 0.07   # INCREASED - now with track/distance specialization
+    jockey_trainer_synergy_weight: float = 0.05  # NEW - jockey-trainer combo bonus
     
     # Model weights
     xgboost_weight: float = 0.4
@@ -121,7 +122,18 @@ class EnsembleModel:
             # 3. Track Specialization
             track_score = features.get('track_score')
             if track_score is not None:
-                track_adj = float(track_score) / 100.0
+                # Apply bonus for track specialist jockey/trainer
+                jockey_track_bonus = 1.0
+                if features.get('jockey_is_track_specialist'):
+                    jockey_track_bonus = 1.15  # 15% bonus for jockey specialist
+                
+                trainer_track_bonus = 1.0
+                if features.get('trainer_is_track_specialist'):
+                    trainer_track_bonus = 1.10  # 10% bonus for trainer specialist
+                
+                track_adj = (float(track_score) / 100.0) * jockey_track_bonus * trainer_track_bonus
+                track_adj = min(0.99, track_adj)  # Cap at 0.99
+                
                 factors['track_specialization'] = {
                     'value': track_adj,
                     'weight': self.config.track_score_weight
@@ -136,22 +148,46 @@ class EnsembleModel:
                     'weight': self.config.universal_score_weight
                 }
             
-            # 5. Jockey Performance
-            jockey_win_rate = features.get('jockey_win_rate')
-            if jockey_win_rate is not None:
-                jockey_adj = float(jockey_win_rate) / 100.0
+            # 5. Jockey Performance (with track/distance specialization)
+            jockey_score = features.get('jockey_score')
+            if jockey_score is not None:
+                jockey_adj = float(jockey_score) / 100.0
+                factors['jockey_performance'] = {
+                    'value': jockey_adj,
+                    'weight': self.config.jockey_weight
+                }
+            elif features.get('jockey_win_rate') is not None:
+                # Fallback to win rate if score not available
+                jockey_adj = float(features['jockey_win_rate']) / 100.0
                 factors['jockey_performance'] = {
                     'value': jockey_adj,
                     'weight': self.config.jockey_weight
                 }
             
-            # 6. Trainer Performance
-            trainer_win_rate = features.get('trainer_win_rate')
-            if trainer_win_rate is not None:
-                trainer_adj = float(trainer_win_rate) / 100.0
+            # 6. Trainer Performance (with track/distance specialization)
+            trainer_score = features.get('trainer_score')
+            if trainer_score is not None:
+                trainer_adj = float(trainer_score) / 100.0
                 factors['trainer_performance'] = {
                     'value': trainer_adj,
                     'weight': self.config.trainer_weight
+                }
+            elif features.get('trainer_win_rate') is not None:
+                # Fallback to win rate if score not available
+                trainer_adj = float(features['trainer_win_rate']) / 100.0
+                factors['trainer_performance'] = {
+                    'value': trainer_adj,
+                    'weight': self.config.trainer_weight
+                }
+            
+            # 7. Jockey-Trainer Synergy
+            jt_synergy_score = features.get('jt_synergy_score')
+            if jt_synergy_score is not None and jt_synergy_score > 50:
+                # Only add synergy if it's positive
+                synergy_adj = float(jt_synergy_score) / 100.0
+                factors['jt_synergy'] = {
+                    'value': synergy_adj,
+                    'weight': self.config.jockey_trainer_synergy_weight
                 }
             
             if not factors:

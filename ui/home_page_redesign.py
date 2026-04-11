@@ -889,26 +889,34 @@ class RedesignedHomePage(QWidget):
                 SELECT DISTINCT DATE(race_date) as race_date 
                 FROM fixtures 
                 ORDER BY DATE(race_date) DESC 
-                LIMIT 14
+                LIMIT 30
             """)
             
-            fixture_dates = [row['race_date'] for row in cursor.fetchall()]
+            fixture_dates = {row['race_date'] for row in cursor.fetchall()}
             
             # Get dates that have race card data
             cursor.execute("""
                 SELECT DISTINCT DATE(race_date) as race_date 
                 FROM future_race_cards 
                 ORDER BY DATE(race_date) DESC
+                LIMIT 30
             """)
             
             racecard_dates = {row['race_date'] for row in cursor.fetchall()}
             conn.close()
             
-            if fixture_dates:
+            # Combine all unique dates from both sources
+            all_dates = fixture_dates.union(racecard_dates)
+            
+            if all_dates:
                 current_idx = self.date_combo.currentIndex()
+                current_date = self.date_combo.itemData(current_idx) if current_idx >= 0 else None
                 self.date_combo.clear()
                 
-                for d in fixture_dates:
+                # Sort dates in descending order (newest first)
+                sorted_dates = sorted(all_dates, reverse=True)
+                
+                for d in sorted_dates:
                     # Format display
                     try:
                         date_obj = datetime.strptime(d, '%Y-%m-%d')
@@ -918,21 +926,31 @@ class RedesignedHomePage(QWidget):
                         elif date_obj.date() == today + timedelta(days=1):
                             date_str = f"明日 ({d})"
                         else:
-                            date_str = date_obj.strftime('%Y-%m-%d (%a)')
+                            date_str = date_obj.strftime('%Y-%m-%d (%a)'
+                        )
                     except:
                         date_str = d
                     
-                    # Add availability indicator and only show available dates
+                    # Add availability indicator based on data availability:
+                    # ✓ = has racecard data (can show races)
+                    # ⚠ = fixture only, no racecard yet
                     if d in racecard_dates:
                         display = f"✓ {date_str}"
-                        self.date_combo.addItem(display, d)
                     else:
-                        # Skip dates without racecard data
-                        continue
+                        display = f"⚠ {date_str}"
+                    
+                    self.date_combo.addItem(display, d)
                 
-                # Restore selection or select the most recent available date
-                if current_idx >= 0 and current_idx < self.date_combo.count():
-                    self.date_combo.setCurrentIndex(current_idx)
+                # Restore selection if possible
+                if current_date:
+                    for i in range(self.date_combo.count()):
+                        if self.date_combo.itemData(i) == current_date:
+                            self.date_combo.setCurrentIndex(i)
+                            break
+                    else:
+                        # Date not found, select most recent
+                        if self.date_combo.count() > 0:
+                            self.date_combo.setCurrentIndex(0)
                 elif self.date_combo.count() > 0:
                     self.date_combo.setCurrentIndex(0)
         except Exception as e:

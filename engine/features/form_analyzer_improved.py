@@ -64,7 +64,7 @@ class ImprovedFormAnalyzer:
             }
         
         weights = self._calculate_recency_weights(len(positions), decay_rate=2.0)
-        weighted_positions = np.average(positions, weights=weights)
+        weighted_positions = np.average(np.array(positions, dtype=np.float64), weights=weights)
         
         consistency = 100 - (np.std(positions) * 10)
         momentum = int(positions[0]) - int(positions[-1])

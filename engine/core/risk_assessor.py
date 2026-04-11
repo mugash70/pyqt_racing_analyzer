@@ -175,6 +175,22 @@ class RiskAssessor:
             'recent_issues': []
         }
     
+    def _parse_position(self, pos) -> int:
+        """Parse position string to integer."""
+        if not pos:
+            return 0
+        try:
+            # Handle strings like "1", "1/14", etc.
+            if isinstance(pos, str):
+                import re
+                match = re.search(r'\d+', pos)
+                if match:
+                    return int(match.group())
+                return 0
+            return int(pos)
+        except (ValueError, TypeError):
+            return 0
+
     def assess_form_decline_risk(self, horse_name: str) -> Dict:
         """
         Assess form decline risk.
@@ -191,8 +207,23 @@ class RiskAssessor:
                 'decline_rate': 0.0
             }
         
-        recent_avg = np.mean([r['position'] for r in results[:5] if r['position']])
-        older_avg = np.mean([r['position'] for r in results[5:10] if r['position']])
+        recent_positions = [self._parse_position(r['position']) for r in results[:5] if r['position']]
+        older_positions = [self._parse_position(r['position']) for r in results[5:10] if r['position']]
+        
+        # Filter out 0 (parsing errors or missing)
+        recent_positions = [p for p in recent_positions if p > 0]
+        older_positions = [p for p in older_positions if p > 0]
+        
+        if not recent_positions or not older_positions:
+            return {
+                'risk_level': 'Medium',
+                'severity': 'medium',
+                'form_trend': 'Insufficient valid data',
+                'decline_rate': 0.0
+            }
+            
+        recent_avg = np.mean(recent_positions)
+        older_avg = np.mean(older_positions)
         
         decline_rate = recent_avg - older_avg
         
