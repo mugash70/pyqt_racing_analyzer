@@ -1,0 +1,11 @@
+# Race Card CSV Format
+# Save as: race_cards_2026-04-22.csv
+#
+# Columns: race_date,race_number,racecourse,horse_number,horse_name,jockey,trainer,weight,draw
+#
+# Example:
+race_date,race_number,racecourse,horse_number,horse_name,jockey,trainer,weight,draw
+2026-04-22,1,ST,1,馬匹名稱1,騎師1,練馬師1,130,3
+2026-04-22,1,ST,2,馬匹名稱2,騎師2,練馬師2,125,5
+2026-04-22,1,ST,3,馬匹名稱3,騎師3,練馬師3,128,1
+2026-04-22,2,ST,1,馬匹名稱A,騎師A,練馬師A,132,2

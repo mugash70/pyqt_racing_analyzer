@@ -18,9 +18,9 @@ logger = logging.getLogger(__name__)
 class HKJCResultsScraper:
     """Scraper for HKJC racing information."""
     
-    BASE_URL = "https://racing.hkjc.com/en-us/local/information"
-    INFO_URL = "https://racing.hkjc.com/en-us/local/info"
-    PAGE_URL = "https://racing.hkjc.com/en-us/local/page"
+    BASE_URL = "https://racing.hkjc.com/zh-hk/local/information"
+    INFO_URL = "https://racing.hkjc.com/zh-hk/local/info"
+    PAGE_URL = "https://racing.hkjc.com/zh-hk/local/page"
     
     def __init__(self):
         self.session = requests.Session()
@@ -465,11 +465,19 @@ class HKJCResultsScraper:
             for i, row in enumerate(rows):
                 cols = row.find_all('td')
                 if len(cols) > 2:
-                    # Check if col 1 or 2 looks like a horse name (contains Chinese characters or letters)
-                    for idx in [1, 2, 3]:
-                        if idx < len(cols) and re.search(r'[\u4e00-\u9fff]|[a-zA-Z]', cols[idx].text):
+                    # First try to find "馬名" or "Horse" header in the row
+                    for idx, col in enumerate(cols):
+                        col_text = col.text.strip().lower()
+                        if col_text in ['馬名', 'horse', 'name', '馬匹', '馬名 / Horse Name']:
                             header_idx['name'] = idx
                             break
+                    
+                    # If not found, check if col 1 or 2 looks like a horse name (contains Chinese characters or letters)
+                    if 'name' not in header_idx:
+                        for idx in [1, 2, 3]:
+                            if idx < len(cols) and re.search(r'[\u4e00-\u9fff]|[a-zA-Z]', cols[idx].text):
+                                header_idx['name'] = idx
+                                break
                     if 'name' in header_idx: break
         
         for row in rows:
@@ -484,9 +492,20 @@ class HKJCResultsScraper:
                 if not horse_num_text:
                     continue
                 
+                # Get horse name from the identified column
                 horse_name = cols[header_idx.get('name', 2)].text.strip()
-                # Skip if name looks like a header or is empty
-                if horse_name in ['馬名', 'Horse', ''] or len(horse_name) < 2:
+                
+                # Validate: if name is just digits (likely a horse number), try other columns
+                if re.match(r'^\d{1,4}$', horse_name):
+                    for alt_idx in [1, 2, 3, 4]:
+                        if alt_idx < len(cols):
+                            alt_name = cols[alt_idx].text.strip()
+                            if alt_name and not re.match(r'^\d{1,4}$', alt_name) and len(alt_name) >= 2:
+                                horse_name = alt_name
+                                break
+                
+                # Skip if name looks like a header or is empty or still just digits
+                if horse_name in ['馬名', 'Horse', ''] or len(horse_name) < 2 or re.match(r'^\d{1,4}$', horse_name):
                     continue
                 
                 horse_data.append({

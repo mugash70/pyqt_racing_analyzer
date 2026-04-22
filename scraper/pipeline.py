@@ -1162,7 +1162,7 @@ class HKJCDataPipeline:
             else:
                 # Insert new record
                 cursor.execute("""
-                    INSERT INTO professional_schedules (race_date, pro_type, professional_name, race_number, horse_name, schedule_details, scraped_at)
+                    INSERT INTO professional_schedules (race_date, professional_type, professional_name, race_number, horse_name, schedule_details, scraped_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (
                     race_date,

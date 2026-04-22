@@ -1249,6 +1249,7 @@ class RedesignedHomePage(QWidget):
         self.prediction_worker.start()
         
     def on_predictions_finished(self, predictions):
+        print("++++++++++++++", predictions)  # correct
         """Handle finished predictions."""
         # Update race cards with predictions
         for i in range(self.races_layout.count()):

@@ -185,7 +185,7 @@ class EnhancedRacePredictor:
                 continue
             
             prediction = self._predict_single_horse(
-                horse, race_info, current_odds, field_size
+                horse, race_info, current_odds, field_size, normalized_date
             )
             if prediction:
                 raw_predictions.append(prediction)
@@ -252,11 +252,14 @@ class EnhancedRacePredictor:
         }
     
     def _predict_single_horse(self, horse: Dict, race_info: Dict, 
-                             current_odds: float, field_size: int) -> Optional[Dict]:
+                             current_odds: float, field_size: int,
+                             normalized_date: str = None) -> Optional[Dict]:
         """Generate prediction for a single horse."""
         try:
             distance = race_info.get('distance')
             race_class = race_info.get('class')
+            race_number = race_info.get('number', 1)
+            track = race_info.get('track', 'ST')
             horse_name = horse.get('name', 'Unknown')
             
             # Extract features
@@ -339,9 +342,28 @@ class EnhancedRacePredictor:
                 combined_confidence = 0.5
             
             # Build prediction dict
+            horse_name_raw = horse.get('name', horse.get('horse_name', 'Unknown'))
+            # Handle case where horse_name is empty or just digits (scraper error - website likely changed)
+            if not horse_name_raw or (horse_name_raw.isdigit() and len(horse_name_raw) <= 4):
+                # Try to find correct name from race_results for same horse number
+                horse_num = horse.get('number', '')
+                if horse_num:
+                    correct_name = self.data.get_horse_name_by_number(
+                        normalized_date, race_number, track, horse_num
+                    )
+                    if correct_name:
+                        horse_name_value = correct_name
+                    else:
+                        # Last resort: try using just the number as name with # prefix
+                        horse_name_value = f"#{horse_num}"
+                else:
+                    horse_name_value = "Unknown"
+            else:
+                horse_name_value = horse_name_raw
             prediction = {
-                'horse_number': horse['number'],
-                'horse_name': horse['name'],
+                'horse_number': horse.get('number', ''),
+                'horse_name': horse_name_value,
+                'name': horse_name_value,
                 'jockey': horse.get('jockey', ''),
                 'trainer': horse.get('trainer', ''),
                 'weight': horse.get('weight', ''),
@@ -390,10 +412,10 @@ class EnhancedRacePredictor:
             reasons['negative_factors'].append(f"Lower confidence: {confidence:.0%}")
         
         # Draw position
-        draw = prediction.get('draw', 0)
-        if draw <= 3:
+        draw = prediction.get('draw', 0) or 0
+        if draw and draw <= 3:
             reasons['positive_factors'].append(f"Favorable inside draw (Gate {draw})")
-        elif draw >= 10:
+        elif draw and draw >= 10:
             reasons['negative_factors'].append(f"Challenging wide draw (Gate {draw})")
         
         # Jockey

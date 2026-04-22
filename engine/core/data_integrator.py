@@ -167,6 +167,58 @@ class DataIntegrator:
         finally:
             conn.close()
     
+    def get_horse_name_by_number(self, race_date: str, race_number: int, racecourse: str, horse_number) -> str:
+        """Get horse name by horse number (fallback when horse_name is missing/invalid)."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            # Normalize horse_number to int
+            try:
+                horse_num_int = int(horse_number)
+            except (ValueError, TypeError):
+                return None
+            
+            date_prefix = race_date.split(' ')[0]
+            
+            # Helper to check if name is valid (not just digits)
+            def is_valid_name(name):
+                if not name:
+                    return False
+                name_str = str(name).strip()
+                # Reject if purely digits and 4 or fewer chars (likely a horse number mistakenly stored as name)
+                if name_str.isdigit() and len(name_str) <= 4:
+                    return False
+                return True
+            
+            # Try race_results first (historical data often has correct names)
+            # Also try without racecourse filter in case it's different
+            cursor.execute("""
+                SELECT horse_name FROM race_results
+                WHERE race_date LIKE ? AND race_number = ? AND horse_number = ?
+                LIMIT 1
+            """, (f"{date_prefix}%", race_number, horse_num_int))
+            
+            row = cursor.fetchone()
+            if row and is_valid_name(row[0]):
+                return row[0]
+            
+            # Try future_race_cards with different date formats
+            for date_fmt in [f"{date_prefix}%", race_date, date_prefix]:
+                cursor.execute("""
+                    SELECT horse_name FROM future_race_cards
+                    WHERE race_date LIKE ? AND race_number = ? AND racecourse = ? AND horse_number = ?
+                    LIMIT 1
+                """, (date_fmt, race_number, racecourse, horse_num_int))
+                
+                row = cursor.fetchone()
+                if row and is_valid_name(row[0]):
+                    return row[0]
+            
+            return None
+        finally:
+            conn.close()
+    
     def get_horse_race_results(self, horse_name: str, limit: int = 20) -> List[Dict]:
         """Get recent race results for a horse."""
         conn = self._get_connection()
